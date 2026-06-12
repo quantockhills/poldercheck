@@ -44,7 +44,11 @@ def build_store():
         client.delete_collection(COLLECTION_NAME)
     except Exception:
         pass
-    collection = client.create_collection(COLLECTION_NAME)
+    # Cosine space: retrieve.py converts distance to a similarity score,
+    # which only makes sense for cosine (Chroma defaults to squared L2).
+    collection = client.create_collection(
+        COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
+    )
 
     all_texts, all_metadata, all_ids = [], [], []
 

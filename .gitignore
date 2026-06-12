@@ -7,3 +7,4 @@ data/static/*.pdf
 data/processed/
 eval_results.json
 .pytest_cache/
+deepseekinterim.txt
