@@ -5,7 +5,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-gh repo create poldercheck --private --source . --push
+REPO="quantockhills/poldercheck"
+
+if ! gh repo view "$REPO" >/dev/null 2>&1; then
+  gh repo create poldercheck --private --source . --push
+else
+  git remote get-url origin >/dev/null 2>&1 || \
+    git remote add origin "git@github.com:${REPO}.git"
+  git push -u origin main
+fi
 
 issue() {
   gh issue create --title "$1" --body "$2" >/dev/null
