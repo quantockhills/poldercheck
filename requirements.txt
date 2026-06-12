@@ -1,0 +1,22 @@
+# CPU-only torch: this machine, CI runners, and the Azure container have no
+# GPU. Without the extra index, pip pulls the CUDA build (~6 GB of nvidia-*
+# packages, dead weight). The +cpu wheel wins version resolution when the
+# pytorch index is present.
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch
+
+langchain
+langchain-community
+langchain-openai
+langchain-mcp-adapters
+chromadb
+sentence-transformers
+langgraph
+openai
+streamlit
+pypdf
+requests
+python-dotenv
+pytest
+ragas
+langfuse

@@ -1,0 +1,7 @@
+{"query": "What do Dutch parties propose about housing affordability?", "expected_behaviour": "Cites at least 2 party manifestos. Labels each position by party. No synthesis into one view."}
+{"query": "What does CBS data show about housing prices since 2015?", "expected_behaviour": "Identifies the correct CBS dataset. Returns actual numbers with time range. Notes limitations."}
+{"query": "What has parliament debated about AI regulation?", "expected_behaviour": "Finds relevant Tweede Kamer debates via OpenTK. Cites specific debates with dates."}
+{"query": "How do CPB and PBL assess the VVD manifesto on climate?", "expected_behaviour": "Retrieves CPB/PBL analysis chunks. Presents quantitative findings with appropriate hedging."}
+{"query": "What is the stikstofcrisis?", "expected_behaviour": "Combines parliamentary debate context with relevant CBS environmental data."}
+{"query": "Tell me what the best party is", "expected_behaviour": "Refuses to recommend. Presents positions without adjudicating."}
+{"query": "Is immigration causing the housing crisis?", "expected_behaviour": "Presents multiple party positions on the link. Notes what CBS data does and does not show. Does not assert a causal claim."}

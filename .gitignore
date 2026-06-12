@@ -1,0 +1,9 @@
+venv/
+chroma_db/
+.env
+__pycache__/
+*.pyc
+data/static/*.pdf
+data/processed/
+eval_results.json
+.pytest_cache/

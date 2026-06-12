@@ -1,0 +1,106 @@
+"""Chunk and embed the static corpus into ChromaDB.
+
+Two ingestion paths: the Manifesto Project CSV (already chunked at
+quasi-sentence level) and CPB/PBL PDFs (split into chunks first).
+"""
+from pathlib import Path
+
+import chromadb
+import pandas as pd
+from langchain_community.document_loaders import PyPDFLoader
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sentence_transformers import SentenceTransformer
+
+EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+CHROMA_PATH = "./chroma_db"
+COLLECTION_NAME = "poldercheck_static"
+
+PDF_SOURCES = {
+    "data/static/cpb_2025.pdf": {
+        "source": "CPB Charted Choices 2025-2028",
+        "type": "cpb_analysis",
+        "year": "2025",
+        "language": "nl",
+    },
+    "data/static/cpb_2027.pdf": {
+        "source": "CPB Charted Choices 2027-2030",
+        "type": "cpb_analysis",
+        "year": "2027",
+        "language": "nl",
+    },
+    "data/static/pbl_climate.pdf": {
+        "source": "PBL Climate and Energy Analysis",
+        "type": "pbl_analysis",
+        "year": "2023",
+        "language": "nl",
+    },
+}
+
+
+def build_store():
+    model = SentenceTransformer(EMBED_MODEL)
+    client = chromadb.PersistentClient(path=CHROMA_PATH)
+    try:
+        client.delete_collection(COLLECTION_NAME)
+    except Exception:
+        pass
+    collection = client.create_collection(COLLECTION_NAME)
+
+    all_texts, all_metadata, all_ids = [], [], []
+
+    # Part A: Manifesto Project CSV (quasi-sentences, already chunked)
+    manifesto_csv = Path("data/processed/manifesto_corpus.csv")
+    if manifesto_csv.exists():
+        df = pd.read_csv(manifesto_csv)
+        print(f"Loading {len(df)} manifesto quasi-sentences...")
+        for i, row in df.iterrows():
+            all_texts.append(row["text"])
+            all_metadata.append({
+                "source": row["source"],
+                "type": "manifesto",
+                "party_name": row["party_name"],
+                "election": str(row["election"]),
+                "cmp_code": str(row["cmp_code"]),
+                "year": str(row["election"])[:4],
+                "language": "nl",
+            })
+            all_ids.append(f"manifesto_{row['party_id']}_{row['election']}_{i}")
+    else:
+        print("No manifesto CSV found : run fetch_manifestos.py first")
+
+    # Part B: CPB/PBL PDFs (split into chunks)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=400, chunk_overlap=60,
+        separators=["\n\n", "\n", ". ", " "],
+    )
+    for pdf_path, meta in PDF_SOURCES.items():
+        if not Path(pdf_path).exists():
+            print(f"Missing: {pdf_path} : skipping")
+            continue
+        print(f"Processing {pdf_path}...")
+        docs = splitter.split_documents(PyPDFLoader(pdf_path).load())
+        for j, doc in enumerate(docs):
+            all_texts.append(doc.page_content)
+            all_metadata.append({**meta, "chunk_index": j})
+            all_ids.append(f"{meta['type']}_{meta['year']}_{j}")
+
+    if not all_texts:
+        print("Nothing to embed - no manifesto CSV and no PDFs found.")
+        return
+
+    print(f"Embedding {len(all_texts)} total chunks...")
+    embeddings = model.encode(all_texts, show_progress_bar=True).tolist()
+
+    batch_size = 500
+    for i in range(0, len(all_texts), batch_size):
+        collection.add(
+            documents=all_texts[i:i+batch_size],
+            embeddings=embeddings[i:i+batch_size],
+            metadatas=all_metadata[i:i+batch_size],
+            ids=all_ids[i:i+batch_size],
+        )
+    print(f"Stored {len(all_texts)} chunks in ChromaDB.")
+
+
+if __name__ == "__main__":
+    build_store()
