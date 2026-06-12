@@ -53,6 +53,10 @@ with st.sidebar:
     st.markdown("- Party manifestos (Manifesto Project)")
     st.markdown("- CPB Charted Choices")
     st.markdown("- PBL Climate Analysis")
+    st.markdown("### Scope")
+    st.markdown("National-level politics only, for now. Local parties and "
+                "municipal councils are on the roadmap. Poldercheck is not "
+                "a stemhulp: it will not recommend a party.")
     st.markdown("### Language")
     st.markdown("Ask in English or Dutch. Sources are in Dutch; "
                 "responses are in English.")

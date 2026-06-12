@@ -57,9 +57,6 @@ issue "Verify Langfuse tracing end-to-end (Step 13)" \
 issue "Run RAGAS eval, tune thresholds, publish scores (Step 14)" \
 "src/eval/run_eval.py + eval_set.jsonl exist; contract tests green. After corpus + keys: run full eval, tune faithfulness/context_precision thresholds against reality, put scores in README ('measured, not asserted'). Eval CI job runs on main only."
 
-issue "Scope disclosure: national-only, front and center" \
-"AP regulator criticised AI political tools for silently ignoring local parties. Be explicit instead: add a scope line to the Streamlit sidebar and both analyst system prompts - national-level politics only for now; local parties and municipal councils on the roadmap."
-
 issue "Local parties: Kiesraad registry awareness" \
 "Minimum honesty fix for the AP's local-party criticism: load Kiesraad registered-party lists per municipality so the system can say 'these local parties exist but are not yet in my corpus' instead of omitting them."
 
