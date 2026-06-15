@@ -9,9 +9,9 @@ import chromadb
 import pandas as pd
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
 
-EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+from src.ingest.embed import embed_texts
+
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "poldercheck_static"
 
@@ -38,7 +38,6 @@ PDF_SOURCES = {
 
 
 def build_store():
-    model = SentenceTransformer(EMBED_MODEL)
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     try:
         client.delete_collection(COLLECTION_NAME)
@@ -56,6 +55,7 @@ def build_store():
     manifesto_csv = Path("data/processed/manifesto_corpus.csv")
     if manifesto_csv.exists():
         df = pd.read_csv(manifesto_csv)
+        df = df[df["cmp_code"] != "H"]  # drop section headers — no policy content
         print(f"Loading {len(df)} manifesto quasi-sentences...")
         for i, row in df.iterrows():
             all_texts.append(row["text"])
@@ -92,8 +92,8 @@ def build_store():
         print("Nothing to embed - no manifesto CSV and no PDFs found.")
         return
 
-    print(f"Embedding {len(all_texts)} total chunks...")
-    embeddings = model.encode(all_texts, show_progress_bar=True).tolist()
+    print(f"Embedding {len(all_texts)} total chunks via OpenRouter...")
+    embeddings = embed_texts(all_texts, batch_size=128)
 
     batch_size = 500
     for i in range(0, len(all_texts), batch_size):

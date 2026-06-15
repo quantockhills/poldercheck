@@ -168,6 +168,8 @@ All sources are free and open.
 | CPB Charted Choices | Economic scoring of party manifestos, every election since 1986 | PDF (downloaded from cpb.nl) | ChromaDB |
 | PBL climate analysis | Environmental impact of party manifestos, per election | PDF (downloaded from pbl.nl) | ChromaDB |
 
+*Coming later: historical CPB Charted Choices reports (2006–2021) and additional PBL reports on housing, nitrogen, and spatial planning. These are tracked in [#21](https://github.com/quantockhills/poldercheck/issues/21) and [#22](https://github.com/quantockhills/poldercheck/issues/22).*
+
 ---
 
 ## Development roadmap

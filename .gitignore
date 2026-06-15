@@ -8,3 +8,5 @@ data/processed/
 eval_results.json
 .pytest_cache/
 deepseekinterim.txt
+docs/cbs-mcp-src/
+docs/opentk-mcp/
