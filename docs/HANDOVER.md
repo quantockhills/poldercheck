@@ -90,18 +90,24 @@ rsync -av --progress \
 
 ## Step 6 — CBS MCP binary
 
-The CBS MCP server is a Go binary. Either transfer the compiled binary:
+The CBS MCP server is a Go binary. The compiled binary lives locally at
+`/home/madhav22m/gitrepos/AI projects/poldercheck/docs/cbs-mcp-src/mcp-cbs-cijfers-open-data`
+(gitignored — not in the repo). Transfer it:
 
 ```bash
 scp "/home/madhav22m/gitrepos/AI projects/poldercheck/docs/cbs-mcp-src/mcp-cbs-cijfers-open-data" \
     sasha@46.225.153.227:/usr/local/bin/mcp-cbs-cijfers-open-data
+ssh sasha@46.225.153.227 "chmod +x /usr/local/bin/mcp-cbs-cijfers-open-data"
 ```
 
-Or recompile on the server (requires Go):
+Or recompile on the server (requires Go). One patch is required: in `main.go`,
+the `get_dimension_values` tool must call `/{dataset}/{dimension}Codes` not
+`/DimensionValues?$filter=Dimension eq '...'`. See AGENTS.md for details.
+
 ```bash
 git clone https://github.com/dstotijn/mcp-cbs-cijfers-open-data
 cd mcp-cbs-cijfers-open-data
-# Apply the DimensionValues → {dimension}Codes patch from docs/cbs-mcp-src/main.go
+# Apply patch described in docs/AGENTS.md, then:
 go build -o /usr/local/bin/mcp-cbs-cijfers-open-data .
 ```
 

@@ -42,7 +42,8 @@ poldercheck/
 │   └── test_retrieve.py
 ├── docs/
 │   ├── AGENTS.md                 # this file
-│   └── HANDOVER.md               # server setup guide
+│   ├── HANDOVER.md               # server setup guide
+│   └── portfolio-plan.md         # portfolio strategy + NL job market analysis
 ├── .env                          # API keys (gitignored)
 ├── .env.example
 ├── requirements.txt
@@ -176,7 +177,7 @@ python -m src.graph
 streamlit run src/app.py
 ```
 
-The CBS MCP binary (`mcp-cbs-cijfers-open-data`) must be in PATH. It is a Go binary compiled from `github.com/dstotijn/mcp-cbs-cijfers-open-data`. A patched version (fixing `DimensionValues` → `{dimension}Codes`) is in `docs/cbs-mcp-src/` — compile with `go build -o mcp-cbs-cijfers-open-data .` and add to PATH.
+The CBS MCP binary (`mcp-cbs-cijfers-open-data`) must be in PATH. It is a Go binary compiled from `github.com/dstotijn/mcp-cbs-cijfers-open-data` with one patch applied: the `get_dimension_values` tool must call `/{dataset}/{dimension}Codes` instead of `/DimensionValues?$filter=Dimension eq '...'`. The patched source is gitignored locally at `docs/cbs-mcp-src/` — transfer the compiled binary to the server via scp (see HANDOVER.md) or recompile with the patch applied.
 
 OpenTK MCP (`@r-huijts/opentk-mcp`) is fetched automatically via `npx` at query time. Requires Node/npm.
 
@@ -235,7 +236,8 @@ import chromadb
 client = chromadb.PersistentClient("./chroma_db")
 col = client.get_collection("poldercheck_static")
 print(col.count())
-results = col.query(query_texts=["betaalbare huren"], n_results=5)
+from src.ingest.embed import embed_query
+results = col.query(query_embeddings=[embed_query("betaalbare huren")], n_results=5)
 print(results["documents"])
 ```
 
