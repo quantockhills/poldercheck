@@ -1,5 +1,7 @@
 """LangGraph graph wiring the political analyst, data analyst, and synthesis."""
+import asyncio
 import os
+import time
 from typing import TypedDict
 
 from langgraph.graph import StateGraph, END
@@ -7,7 +9,11 @@ from openai import OpenAI
 
 from src.agents.config import AGENT_CONFIGS
 from src.agents.political import run_political_analyst
-from src.agents.data import run_data_analyst
+from src.agents.data import run_data_analyst, CBS_NOT_FOUND
+
+# A user-facing query must never hang: the data analyst gets a hard budget
+# and degrades to an honest not-found beyond it.
+DATA_NODE_TIMEOUT_S = 120
 
 
 class PolderState(TypedDict):
@@ -20,10 +26,12 @@ class PolderState(TypedDict):
 
 def political_node(state: PolderState) -> PolderState:
     """Political analyst node : retrieves from static corpus."""
+    t0 = time.monotonic()
     result = run_political_analyst(
         query=state["query"],
         prior_context=state.get("data_response"),
     )
+    print(f"DEBUG_LOG: political node took {time.monotonic() - t0:.1f}s")
     return {
         **state,
         "political_response": result["response"],
@@ -33,14 +41,23 @@ def political_node(state: PolderState) -> PolderState:
 
 async def data_node(state: PolderState) -> PolderState:
     """Data analyst node : queries CBS via MCP."""
-    response = await run_data_analyst(state["query"])
+    t0 = time.monotonic()
+    try:
+        response = await asyncio.wait_for(
+            run_data_analyst(state["query"]), timeout=DATA_NODE_TIMEOUT_S
+        )
+    except (asyncio.TimeoutError, Exception) as exc:
+        print(f"DEBUG_LOG: data node failed/timed out: {type(exc).__name__}: {exc}")
+        response = CBS_NOT_FOUND
+    print(f"DEBUG_LOG: data node took {time.monotonic() - t0:.1f}s")
     return {**state, "data_response": response}
 
 
 def synthesis_node(state: PolderState) -> PolderState:
     """Synthesis node : combines political and data responses."""
+    t0 = time.monotonic()
     cfg = AGENT_CONFIGS["synthesis"]
-    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
 
     prompt = f"""You are synthesising two expert responses into a single clear answer.
 
@@ -68,6 +85,7 @@ If one of the responses says no information was found, note this clearly."""
         max_tokens=cfg["max_tokens"],
     )
 
+    print(f"DEBUG_LOG: synthesis node took {time.monotonic() - t0:.1f}s")
     return {**state, "final_response": response.choices[0].message.content}
 
 

@@ -20,7 +20,7 @@ def run_political_analyst(query: str, prior_context: str | None = None) -> dict:
     Returns dict with 'response' and 'passages' keys.
     """
     cfg = AGENT_CONFIGS["political_analyst"]
-    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"])
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
 
     # Retrieve relevant passages from static corpus
     passages = retrieve_static(query, n_results=3)
@@ -64,45 +64,45 @@ async def run_political_analyst_v2(query: str, prior_context: str | None = None)
     static_passages = retrieve_static(query, n_results=3)
     static_context = format_for_prompt(static_passages)
 
-    async with MultiServerMCPClient({
+    mcp_client = MultiServerMCPClient({
         "opentk": {
             "command": "npx",
             "args": ["-y", "@r-huijts/opentk-mcp"],
             "transport": "stdio",
         }
-    }) as mcp_client:
-        tools = await mcp_client.get_tools()
+    })
+    tools = await mcp_client.get_tools()
 
-        llm = ChatOpenAI(
-            base_url=cfg["base_url"],
-            api_key=cfg["api_key"],
-            model=cfg["model"],
-            max_tokens=cfg["max_tokens"],
-        )
+    llm = ChatOpenAI(
+        base_url=cfg["base_url"],
+        api_key=cfg["api_key"],
+        model=cfg["model"],
+        max_tokens=cfg["max_tokens"],
+    )
 
-        agent = create_react_agent(llm, tools)
+    agent = create_react_agent(llm, tools)
 
-        user_content = (
-            f"Query: {query}\n\n"
-            f"Retrieved passages from static corpus (manifestos, CPB, PBL):\n\n"
-            f"{static_context}\n\n"
-            f"Use the search_tk tool to find relevant recent parliamentary debates "
-            f"that complement the above. Retrieve at most 3 documents. "
-            f"Use analyze_document_relevance before loading full content to avoid "
-            f"loading irrelevant documents."
-        )
+    user_content = (
+        f"Query: {query}\n\n"
+        f"Retrieved passages from static corpus (manifestos, CPB, PBL):\n\n"
+        f"{static_context}\n\n"
+        f"Use the search_tk tool to find relevant recent parliamentary debates "
+        f"that complement the above. Retrieve at most 3 documents. "
+        f"Use analyze_document_relevance before loading full content to avoid "
+        f"loading irrelevant documents."
+    )
 
-        if prior_context:
-            user_content += f"\n\nCBS data context:\n{prior_context}"
+    if prior_context:
+        user_content += f"\n\nCBS data context:\n{prior_context}"
 
-        result = await agent.ainvoke({
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ]
-        })
+    result = await agent.ainvoke({
+        "messages": [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+    })
 
-        return {
-            "response": result["messages"][-1].content,
-            "passages": static_passages,
-        }
+    return {
+        "response": result["messages"][-1].content,
+        "passages": static_passages,
+    }
