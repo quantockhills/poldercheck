@@ -11,9 +11,12 @@ from src.agents.config import AGENT_CONFIGS
 from src.agents.political import run_political_analyst
 from src.agents.data import run_data_analyst, CBS_NOT_FOUND
 
-# A user-facing query must never hang: the data analyst gets a hard budget
-# and degrades to an honest not-found beyond it.
-DATA_NODE_TIMEOUT_S = 120
+# Product constraint: a user-facing query must answer fast or not at all.
+# The data analyst (autonomous CBS StatLine exploration) is the only
+# unbounded step, so it gets a hard 60s budget. If it has not produced a
+# usable answer by then, it is not worth continuing - degrade to an honest
+# not-found and let the political/synthesis path carry the response.
+DATA_NODE_TIMEOUT_S = 60
 
 
 class PolderState(TypedDict):

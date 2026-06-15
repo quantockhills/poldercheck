@@ -3,10 +3,12 @@ from pathlib import Path
 
 import mcp.types
 from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
 from src.agents.config import AGENT_CONFIGS
+from src.ingest.retrieve import retrieve_cbs_datasets
 
 # The prebuilt CBS MCP server (v0.2.1, built on an early-2025 mcp-go)
 # hard-rejects protocol versions it doesn't know instead of negotiating
@@ -24,16 +26,42 @@ CBS_NOT_FOUND = (
 )
 
 
+def _format_candidates(candidates: list[dict]) -> str:
+    lines = []
+    for c in candidates:
+        lines.append(
+            f"- {c['identifier']}: {c['title']} "
+            f"(period: {c['period']}, relevance: {c['relevance_score']})"
+        )
+    return "\n".join(lines)
+
+
 async def run_data_analyst(query: str) -> str:
     """
     Run the data analyst agent using the CBS MCP server.
-    Returns a string response with CBS statistics.
+
+    Two-phase approach:
+    1. Semantic search over pre-indexed CBS catalog -> dataset IDs (fast, local)
+    2. MCP agent calls get_dimensions + get_observations on those IDs directly
+       - no blind search loop, no backtracking, bounded tool calls
     """
     cfg = AGENT_CONFIGS["data_analyst"]
 
+    # Phase 1: catalog lookup (local ChromaDB, ~50ms)
+    candidates = retrieve_cbs_datasets(query, n_results=5)
+    DEBUG_LOG = print  # keep for next feature
+
+    DEBUG_LOG(f"DEBUG_LOG: catalog found {len(candidates)} candidates: "
+              f"{[c['identifier'] for c in candidates]}")
+    candidates_block = (
+        "The CBS catalog semantic search has pre-identified these relevant datasets:\n"
+        + _format_candidates(candidates)
+        + "\n\nStart directly with get_dimensions on the most promising dataset. "
+        "Do NOT call search_datasets — you already have the right IDs."
+    )
+
+    # Phase 2: MCP agent — bounded to get_dimensions + get_observations only
     try:
-        # As of langchain-mcp-adapters 0.1.0+, MultiServerMCPClient is not a
-        # context manager; sessions are managed per get_tools() call.
         mcp_client = MultiServerMCPClient({
             "cbs": {
                 "command": "mcp-cbs-cijfers-open-data",
@@ -41,7 +69,6 @@ async def run_data_analyst(query: str) -> str:
                 "transport": "stdio",
             }
         })
-        tools = await mcp_client.get_tools()
 
         llm = ChatOpenAI(
             base_url=cfg["base_url"],
@@ -52,23 +79,22 @@ async def run_data_analyst(query: str) -> str:
             max_retries=1,
         )
 
-        agent = create_react_agent(llm, tools)
+        async with mcp_client.session("cbs") as session:
+            tools = await load_mcp_tools(session)
+            agent = create_react_agent(llm, tools)
 
-        # recursion_limit caps the tool-call loop: without it one confused
-        # model turn can spiral into a 20+ minute session.
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": query},
-                ]
-            },
-            config={"recursion_limit": 12},
-        )
+            # 2 iterations per tool call (LLM + tool); 20 allows ~3 datasets explored
+            result = await agent.ainvoke(
+                {
+                    "messages": [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                        {"role": "user", "content": f"{query}\n\n{candidates_block}"},
+                    ]
+                },
+                config={"recursion_limit": 30},
+            )
 
         return result["messages"][-1].content
     except (FileNotFoundError, OSError) as exc:
-        # CBS MCP binary not installed (Step 8) - degrade honestly rather
-        # than crash the whole graph.
-        print(f"DEBUG_LOG: CBS MCP server unavailable: {exc}")
+        DEBUG_LOG(f"DEBUG_LOG: CBS MCP server unavailable: {exc}")
         return CBS_NOT_FOUND
