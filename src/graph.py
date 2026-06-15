@@ -8,15 +8,11 @@ from langgraph.graph import StateGraph, END
 from openai import OpenAI
 
 from src.agents.config import AGENT_CONFIGS
-from src.agents.political import run_political_analyst
+from src.agents.political import run_political_analyst_v2
 from src.agents.data import run_data_analyst, CBS_NOT_FOUND
 
-# Product constraint: a user-facing query must answer fast or not at all.
-# The data analyst (autonomous CBS StatLine exploration) is the only
-# unbounded step, so it gets a hard 60s budget. If it has not produced a
-# usable answer by then, it is not worth continuing - degrade to an honest
-# not-found and let the political/synthesis path carry the response.
 DATA_NODE_TIMEOUT_S = 60
+POLITICAL_NODE_TIMEOUT_S = 60  # includes npx startup + OpenTK search
 
 
 class PolderState(TypedDict):
@@ -27,13 +23,20 @@ class PolderState(TypedDict):
     final_response: str
 
 
-def political_node(state: PolderState) -> PolderState:
-    """Political analyst node : retrieves from static corpus."""
+async def political_node(state: PolderState) -> PolderState:
+    """Political analyst node: static corpus + live OpenTK parliamentary search."""
     t0 = time.monotonic()
-    result = run_political_analyst(
-        query=state["query"],
-        prior_context=state.get("data_response"),
-    )
+    try:
+        result = await asyncio.wait_for(
+            run_political_analyst_v2(
+                query=state["query"],
+                prior_context=state.get("data_response"),
+            ),
+            timeout=POLITICAL_NODE_TIMEOUT_S,
+        )
+    except (asyncio.TimeoutError, Exception) as exc:
+        print(f"DEBUG_LOG: political node failed/timed out: {type(exc).__name__}: {exc}")
+        result = {"response": "Political analysis unavailable.", "passages": []}
     print(f"DEBUG_LOG: political node took {time.monotonic() - t0:.1f}s")
     return {
         **state,
