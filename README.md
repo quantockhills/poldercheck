@@ -148,7 +148,7 @@ AGENT_CONFIGS = {
 - Agent orchestration: LangGraph
 - LLM calls: `openai` Python SDK with configurable `base_url`
 - Live parliamentary data: `opentk-mcp` MCP server (Node/TypeScript, via npx)
-- Static corpus: LangChain text splitters + ChromaDB + `sentence-transformers`
+- Static corpus: LangChain text splitters + ChromaDB + OpenRouter embeddings (Qwen3-Embedding-8B)
 - CBS data: `mcp-cbs-cijfers-open-data` MCP server (Go, runs as local process)
 - Frontend: Streamlit (warm pastel design; approachable, not clinical)
 - Deployment: Docker + Azure Container Apps
