@@ -102,7 +102,11 @@ def build_store():
         for pdf_file in sorted(manifesto_dir.glob("*.pdf")):
             party = pdf_file.stem.replace(f"_{year}", "").upper()
             print(f"Processing manifesto: {pdf_file.name}...")
-            docs = splitter.split_documents(PyPDFLoader(str(pdf_file)).load())
+            try:
+                docs = splitter.split_documents(PyPDFLoader(str(pdf_file)).load())
+            except Exception as e:
+                print(f"  SKIPPED (corrupt PDF): {e}")
+                continue
             for j, doc in enumerate(docs):
                 all_texts.append(doc.page_content)
                 all_metadata.append({
