@@ -2,37 +2,35 @@
 import json
 from pathlib import Path
 
-from sentence_transformers import SentenceTransformer
 import chromadb
 
-EMBED_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+from src.ingest.embed import embed_query, embed_texts
+
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "poldercheck_static"
 CBS_CATALOG_COLLECTION = "cbs_catalog"
 CBS_CATALOG_JSONL = Path("data/catalog/cbs_catalog.jsonl")
 
-_model = None
 _collection = None
 _cbs_collection = None
 
 
 def _get_collection():
-    global _model, _collection
+    global _collection
     if _collection is None:
-        _model = SentenceTransformer(EMBED_MODEL)
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         _collection = client.get_collection(COLLECTION_NAME)
-    return _collection, _model
+    return _collection
 
 
-def _build_cbs_collection_from_jsonl(client: chromadb.PersistentClient, model: SentenceTransformer):
+def _build_cbs_collection_from_jsonl(client: chromadb.PersistentClient):
     """Build the CBS catalog ChromaDB collection from the committed JSONL."""
     if not CBS_CATALOG_JSONL.exists():
         raise FileNotFoundError(
             f"CBS catalog not found at {CBS_CATALOG_JSONL}. "
             "Run scripts/build_cbs_catalog.py to fetch and refresh it."
         )
-    print("DEBUG_LOG: building CBS catalog index from JSONL (one-time, ~2 min)...")
+    print("DEBUG_LOG: building CBS catalog index from JSONL (one-time ~5 min via API)...")
     datasets = [json.loads(line) for line in CBS_CATALOG_JSONL.read_text().splitlines() if line.strip()]
 
     collection = client.create_collection(CBS_CATALOG_COLLECTION, metadata={"hnsw:space": "cosine"})
@@ -44,13 +42,14 @@ def _build_cbs_collection_from_jsonl(client: chromadb.PersistentClient, model: S
         metadatas.append({
             "identifier": ds["identifier"],
             "title": ds["title"],
-            "period": ds.get("period", ""),
-            "frequency": ds.get("frequency", ""),
+            "period": ds.get("modified", ds.get("period", "")),  # v4 uses modified date
+            "language": ds.get("language", "nl"),
             "api_url": ds.get("api_url", ""),
         })
         ids.append(ds["identifier"])
 
-    embeddings = model.encode(texts, show_progress_bar=True, batch_size=256).tolist()
+    print(f"DEBUG_LOG: embedding {len(texts)} datasets via OpenRouter...")
+    embeddings = embed_texts(texts, batch_size=128)
     for i in range(0, len(texts), 1000):
         collection.add(
             documents=texts[i:i + 1000],
@@ -63,16 +62,14 @@ def _build_cbs_collection_from_jsonl(client: chromadb.PersistentClient, model: S
 
 
 def _get_cbs_collection():
-    global _cbs_collection, _model
+    global _cbs_collection
     if _cbs_collection is None:
-        if _model is None:
-            _model = SentenceTransformer(EMBED_MODEL)
         client = chromadb.PersistentClient(path=CHROMA_PATH)
         try:
             _cbs_collection = client.get_collection(CBS_CATALOG_COLLECTION)
         except Exception:
-            _cbs_collection = _build_cbs_collection_from_jsonl(client, _model)
-    return _cbs_collection, _model
+            _cbs_collection = _build_cbs_collection_from_jsonl(client)
+    return _cbs_collection
 
 
 def retrieve_static(query: str, n_results: int = 3) -> list[dict]:
@@ -80,8 +77,8 @@ def retrieve_static(query: str, n_results: int = 3) -> list[dict]:
     Retrieve n_results most relevant chunks from the static corpus.
     Returns list of dicts with 'text', 'metadata' and 'relevance_score' keys.
     """
-    collection, model = _get_collection()
-    embedding = model.encode([query]).tolist()
+    collection = _get_collection()
+    embedding = [embed_query(query)]
     results = collection.query(
         query_embeddings=embedding,
         n_results=n_results,
@@ -146,10 +143,10 @@ def retrieve_cbs_datasets(query: str, n_results: int = 5) -> list[dict]:
     first call if it is not already present (one-time ~2 min, then cached).
     Raises if the JSONL is missing (repo checkout problem, not a runtime fallback).
     """
-    collection, model = _get_cbs_collection()
+    collection = _get_cbs_collection()
 
     variants = _expand_query(query)
-    embeddings = model.encode(variants).tolist()
+    embeddings = embed_texts(variants)
 
     seen: dict[str, dict] = {}
     for emb in embeddings:

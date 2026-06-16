@@ -148,7 +148,7 @@ AGENT_CONFIGS = {
 - Agent orchestration: LangGraph
 - LLM calls: `openai` Python SDK with configurable `base_url`
 - Live parliamentary data: `opentk-mcp` MCP server (Node/TypeScript, via npx)
-- Static corpus: LangChain text splitters + ChromaDB + `sentence-transformers`
+- Static corpus: LangChain text splitters + ChromaDB + OpenRouter embeddings (Qwen3-Embedding-8B)
 - CBS data: `mcp-cbs-cijfers-open-data` MCP server (Go, runs as local process)
 - Frontend: Streamlit (warm pastel design; approachable, not clinical)
 - Deployment: Docker + Azure Container Apps
@@ -167,6 +167,8 @@ All sources are free and open.
 | Party manifestos | Full quasi-sentence-level coded manifesto text for all major Dutch parties, every election since 1945 | Manifesto Project API (structured, free) | ChromaDB |
 | CPB Charted Choices | Economic scoring of party manifestos, every election since 1986 | PDF (downloaded from cpb.nl) | ChromaDB |
 | PBL climate analysis | Environmental impact of party manifestos, per election | PDF (downloaded from pbl.nl) | ChromaDB |
+
+*Coming later: historical CPB Charted Choices reports (2006–2021) and additional PBL reports on housing, nitrogen, and spatial planning. These are tracked in [#21](https://github.com/quantockhills/poldercheck/issues/21) and [#22](https://github.com/quantockhills/poldercheck/issues/22).*
 
 ---
 
