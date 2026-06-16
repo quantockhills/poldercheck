@@ -1,11 +1,14 @@
 """Data analyst agent: queries CBS StatLine via the CBS MCP server (Go)."""
+import asyncio
+import json
+import re
 from pathlib import Path
 
 import mcp.types
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
+from openai import OpenAI
 
 from src.agents.config import AGENT_CONFIGS
 from src.ingest.retrieve import retrieve_cbs_datasets
@@ -25,54 +28,42 @@ CBS_NOT_FOUND = (
     "under a different search term, or may not be available in CBS StatLine."
 )
 
+_MCP_CONFIG = {
+    "cbs": {
+        "command": "mcp-cbs-cijfers-open-data",
+        "args": ["--stdio"],
+        "transport": "stdio",
+    }
+}
 
-def _format_candidates(candidates: list[dict]) -> str:
-    lines = []
-    for c in candidates:
-        lines.append(
-            f"- {c['identifier']}: {c['title']} "
-            f"(period: {c['period']}, relevance: {c['relevance_score']})"
-        )
-    return "\n".join(lines)
+
+def _tool_text(result) -> str:
+    return result[0]["text"] if isinstance(result, list) else str(result)
 
 
 async def run_data_analyst(query: str, cbs_queries: list[str] | None = None) -> str:
     """
-    Run the data analyst agent using the CBS MCP server.
+    Parallel fixed pipeline replacing the sequential React agent:
 
-    Two-phase approach:
-    1. Semantic search over pre-indexed CBS catalog -> dataset IDs (fast, local)
-    2. MCP agent calls get_dimensions + get_observations on those IDs directly
-       - no blind search loop, no backtracking, bounded tool calls
+    1. ChromaDB → top 12 candidates (local, ~50ms)
+    2. asyncio.gather → get_dimensions on ALL candidates simultaneously
+    3. Single LLM call picks top 3 datasets based on dimension structures
+    4. asyncio.gather → get_observations on top 3 simultaneously
+    5. Single LLM synthesis with transparency footer
     """
     cfg = AGENT_CONFIGS["data_analyst"]
+    DEBUG_LOG = print
 
-    # Phase 1: catalog lookup (local ChromaDB, ~50ms)
-    # Use LLM-generated query variants from the planner for better recall
     queries = cbs_queries if cbs_queries else [query]
-    candidates = retrieve_cbs_datasets(queries, n_results=5)
-    DEBUG_LOG = print  # keep for next feature
-
+    candidates = retrieve_cbs_datasets(queries, n_results=12)
     DEBUG_LOG(f"DEBUG_LOG: catalog found {len(candidates)} candidates: "
               f"{[c['identifier'] for c in candidates]}")
-    candidates_block = (
-        "The CBS catalog semantic search has pre-identified these relevant datasets:\n"
-        + _format_candidates(candidates)
-        + "\n\nStart directly with get_dimensions on the most promising dataset. "
-        "Do NOT call search_datasets — you already have the right IDs."
-    )
-    statistical_focus = ", ".join(queries[:4]) if queries else query
 
-    # Phase 2: MCP agent — bounded to get_dimensions + get_observations only
+    if not candidates:
+        return CBS_NOT_FOUND
+
     try:
-        mcp_client = MultiServerMCPClient({
-            "cbs": {
-                "command": "mcp-cbs-cijfers-open-data",
-                "args": ["--stdio"],
-                "transport": "stdio",
-            }
-        })
-
+        mcp_client = MultiServerMCPClient(_MCP_CONFIG)
         llm = ChatOpenAI(
             base_url=cfg["base_url"],
             api_key=cfg["api_key"],
@@ -81,23 +72,91 @@ async def run_data_analyst(query: str, cbs_queries: list[str] | None = None) -> 
             timeout=60,
             max_retries=1,
         )
+        # Use sync OpenAI client for the fast selection call (no thinking, low tokens)
+        fast_client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=15)
 
         async with mcp_client.session("cbs") as session:
-            tools = await load_mcp_tools(session)
-            agent = create_react_agent(llm, tools)
+            tools = {t.name: t for t in await load_mcp_tools(session)}
 
-            # 2 iterations per tool call (LLM + tool); 20 allows ~3 datasets explored
-            result = await agent.ainvoke(
-                {
-                    "messages": [
-                        {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": f"{query}\n\nStatistical focus: {statistical_focus}\n\n{candidates_block}"},
-                    ]
-                },
-                config={"recursion_limit": 30},
+            # Step 2: parallel get_dimensions on all candidates
+            dim_results = await asyncio.gather(*[
+                tools["get_dimensions"].ainvoke({"catalog": "CBS", "dataset": c["identifier"]})
+                for c in candidates
+            ], return_exceptions=True)
+
+            dim_summaries = []
+            for c, result in zip(candidates, dim_results):
+                if isinstance(result, Exception):
+                    continue
+                dim_summaries.append(
+                    f"{c['identifier']} — {c['title']}:\n{_tool_text(result)[:400]}"
+                )
+
+            DEBUG_LOG(f"DEBUG_LOG: got dimensions for {len(dim_summaries)}/{len(candidates)} datasets")
+
+            # Step 3: LLM picks top 3
+            selection_prompt = (
+                f"Query: {query}\n\n"
+                f"CBS datasets with their dimensions:\n\n"
+                + "\n\n".join(dim_summaries)
+                + "\n\nReturn JSON only — pick the 3 most relevant dataset identifiers:\n"
+                  '{"selected": ["XXXXNED", "XXXXNED", "XXXXNED"]}'
+            )
+            sel_response = fast_client.chat.completions.create(
+                model=cfg["model"],
+                messages=[{"role": "user", "content": selection_prompt}],
+                max_tokens=60,
+                extra_body={"thinking": {"type": "disabled"}},
+            )
+            raw_sel = sel_response.choices[0].message.content.strip()
+            try:
+                m = re.search(r'\{.*\}', raw_sel, re.DOTALL)
+                selected_ids = json.loads(m.group())["selected"][:3]
+            except Exception:
+                selected_ids = [c["identifier"] for c in candidates[:3]]
+
+            DEBUG_LOG(f"DEBUG_LOG: selected datasets: {selected_ids}")
+
+            not_queried = [
+                f"{c['identifier']} ({c['title']})"
+                for c in candidates if c["identifier"] not in set(selected_ids)
+            ]
+
+            # Step 4: parallel get_observations on top 3
+            obs_results = await asyncio.gather(*[
+                tools["get_observations"].ainvoke({"catalog": "CBS", "dataset": did, "limit": 50})
+                for did in selected_ids
+            ], return_exceptions=True)
+
+            data_blocks = []
+            used_labels = []
+            for did, result in zip(selected_ids, obs_results):
+                if isinstance(result, Exception):
+                    DEBUG_LOG(f"DEBUG_LOG: get_observations failed for {did}: {result}")
+                    continue
+                c_meta = next((c for c in candidates if c["identifier"] == did), {})
+                title = c_meta.get("title", did)
+                data_blocks.append(f"**{did} — {title}**\n{_tool_text(result)[:1200]}")
+                used_labels.append(f"{did} ({title})")
+
+            if not data_blocks:
+                return CBS_NOT_FOUND
+
+            # Step 5: synthesis
+            transparency = (
+                f"\n\n**CBS datasets queried:** {'; '.join(used_labels)}"
+                + (f"\n**Also in catalog, not queried:** {'; '.join(not_queried[:4])}" if not_queried else "")
             )
 
-        return result["messages"][-1].content
+            result = await llm.ainvoke([
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": (
+                    f"{query}\n\nCBS data:\n\n" + "\n\n---\n\n".join(data_blocks)
+                    + "\n\nEnd your response with:\n" + transparency
+                )},
+            ])
+            return result.content
+
     except (FileNotFoundError, OSError) as exc:
         DEBUG_LOG(f"DEBUG_LOG: CBS MCP server unavailable: {exc}")
         return CBS_NOT_FOUND
