@@ -11,7 +11,7 @@ from src.agents.config import AGENT_CONFIGS
 from src.agents.political import run_political_analyst_v2
 from src.agents.data import run_data_analyst, CBS_NOT_FOUND
 
-DATA_NODE_TIMEOUT_S = 60
+DATA_NODE_TIMEOUT_S = 90
 
 
 class PolderState(TypedDict):
