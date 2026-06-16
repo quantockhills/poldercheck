@@ -72,7 +72,7 @@ def build_store():
     else:
         print("No manifesto CSV found : run fetch_manifestos.py first")
 
-    # Part B: CPB/PBL PDFs (split into chunks)
+    # Part B: CPB/PBL PDFs + 2025 party manifestos (split into chunks)
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=400, chunk_overlap=60,
         separators=["\n\n", "\n", ". ", " "],
@@ -87,6 +87,26 @@ def build_store():
             all_texts.append(doc.page_content)
             all_metadata.append({**meta, "chunk_index": j})
             all_ids.append(f"{meta['type']}_{meta['year']}_{j}")
+
+    # Part C: 2025 party manifesto PDFs
+    manifesto_dir = Path("data/static/manifestos_2025")
+    if manifesto_dir.exists():
+        for pdf_file in sorted(manifesto_dir.glob("*.pdf")):
+            party = pdf_file.stem.replace("_2025", "").upper()
+            print(f"Processing manifesto: {pdf_file.name}...")
+            docs = splitter.split_documents(PyPDFLoader(str(pdf_file)).load())
+            for j, doc in enumerate(docs):
+                all_texts.append(doc.page_content)
+                all_metadata.append({
+                    "source": f"{party} Verkiezingsprogramma 2025",
+                    "type": "manifesto_pdf",
+                    "party_name": party,
+                    "election": "202511",
+                    "year": "2025",
+                    "language": "nl",
+                    "chunk_index": j,
+                })
+                all_ids.append(f"manifesto_pdf_{party}_2025_{j}")
 
     if not all_texts:
         print("Nothing to embed - no manifesto CSV and no PDFs found.")
