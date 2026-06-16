@@ -36,7 +36,7 @@ def _format_candidates(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def run_data_analyst(query: str) -> str:
+async def run_data_analyst(query: str, cbs_query: str = "") -> str:
     """
     Run the data analyst agent using the CBS MCP server.
 
@@ -48,7 +48,8 @@ async def run_data_analyst(query: str) -> str:
     cfg = AGENT_CONFIGS["data_analyst"]
 
     # Phase 1: catalog lookup (local ChromaDB, ~50ms)
-    candidates = retrieve_cbs_datasets(query, n_results=5)
+    search_query = cbs_query or query
+    candidates = retrieve_cbs_datasets(search_query, n_results=5)
     DEBUG_LOG = print  # keep for next feature
 
     DEBUG_LOG(f"DEBUG_LOG: catalog found {len(candidates)} candidates: "
@@ -88,7 +89,7 @@ async def run_data_analyst(query: str) -> str:
                 {
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": f"{query}\n\n{candidates_block}"},
+                        {"role": "user", "content": f"{query}\n\nStatistical focus: {search_query}\n\n{candidates_block}"},
                     ]
                 },
                 config={"recursion_limit": 30},

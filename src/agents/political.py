@@ -115,10 +115,7 @@ async def run_political_analyst_v2(
         max_tokens=opentk_cfg["max_tokens"],
         timeout=45,
         max_retries=1,
-    ).bind(
-        parallel_tool_calls=True,
-        extra_body={"thinking": {"type": "disabled"}},
-    )
+    ).bind(parallel_tool_calls=True)
 
     async def _run_fast() -> dict | None:
         """Fixed pipeline: search → parallel analyze → parallel fetch → 1 LLM call."""

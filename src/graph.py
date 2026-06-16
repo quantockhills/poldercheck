@@ -16,12 +16,37 @@ DATA_NODE_TIMEOUT_S = 60
 
 class PolderState(TypedDict):
     query: str
-    language: str  # "nl" | "en"
-    mode: str      # "fast" | "deep"
+    language: str   # "nl" | "en"
+    mode: str       # "fast" | "deep"
+    cbs_query: str  # statistical Dutch reformulation for CBS catalog search
     political_response: str
     political_passages: list
     data_response: str
     final_response: str
+
+
+async def query_planner_node(state: PolderState) -> dict:
+    """Translate user query into Dutch statistical terms for CBS catalog search."""
+    cfg = AGENT_CONFIGS["data_analyst"]
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=15)
+    try:
+        response = client.chat.completions.create(
+            model=cfg["model"],
+            messages=[{"role": "user", "content": (
+                f"Extract the underlying statistical topic from this query as 1-2 Dutch CBS StatLine "
+                f"search terms. Ignore political framing (party stances, debates, opinions). "
+                f"Focus on the measurable phenomenon: e.g. 'huurprijzen', 'woningvoorraad', 'koopwoningen'. "
+                f"Return only the Dutch search terms, space-separated, nothing else.\n\nQuery: {state['query']}"
+            )}],
+            max_tokens=30,
+            extra_body={"thinking": {"type": "disabled"}},
+        )
+        cbs_query = response.choices[0].message.content.strip()
+    except Exception as exc:
+        print(f"DEBUG_LOG: query planner failed, using raw query: {exc}")
+        cbs_query = state["query"]
+    print(f"DEBUG_LOG: cbs_query={cbs_query!r}")
+    return {"cbs_query": cbs_query}
 
 
 async def political_node(state: PolderState) -> dict:
@@ -48,7 +73,8 @@ async def data_node(state: PolderState) -> dict:
     t0 = time.monotonic()
     try:
         response = await asyncio.wait_for(
-            run_data_analyst(state["query"]), timeout=DATA_NODE_TIMEOUT_S
+            run_data_analyst(state["query"], cbs_query=state.get("cbs_query", "")),
+            timeout=DATA_NODE_TIMEOUT_S,
         )
     except (asyncio.TimeoutError, Exception) as exc:
         print(f"DEBUG_LOG: data node failed/timed out: {type(exc).__name__}: {exc}")
@@ -109,13 +135,15 @@ If one of the responses says no information was found, note this clearly.
 def build_graph():
     graph = StateGraph(PolderState)
 
+    graph.add_node("query_planner", query_planner_node)
     graph.add_node("political", political_node)
     graph.add_node("data", data_node)
     graph.add_node("synthesis", synthesis_node)
 
-    # Fan-out: both nodes run in parallel; fan-in to synthesis when both complete
-    graph.add_edge(START, "political")
-    graph.add_edge(START, "data")
+    # query_planner runs first, then political + data fan out in parallel
+    graph.add_edge(START, "query_planner")
+    graph.add_edge("query_planner", "political")
+    graph.add_edge("query_planner", "data")
     graph.add_edge("political", "synthesis")
     graph.add_edge("data", "synthesis")
     graph.add_edge("synthesis", END)
@@ -145,6 +173,7 @@ async def run_query(query: str, language: str = "nl", mode: str = "deep") -> dic
         query=query,
         language=language,
         mode=mode,
+        cbs_query="",
         political_response="",
         political_passages=[],
         data_response="",
