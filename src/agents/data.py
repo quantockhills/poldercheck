@@ -64,7 +64,7 @@ async def run_data_analyst(query: str, cbs_queries: list[str] | None = None) -> 
     DEBUG_LOG = print
 
     queries = cbs_queries if cbs_queries else [query]
-    candidates = retrieve_cbs_datasets(queries, n_results=8)
+    candidates = retrieve_cbs_datasets(queries, n_results=5)
     DEBUG_LOG(f"DEBUG_LOG: catalog found {len(candidates)} candidates: "
               f"{[c['identifier'] for c in candidates]}")
 

@@ -88,25 +88,33 @@ def build_store():
             all_metadata.append({**meta, "chunk_index": j})
             all_ids.append(f"{meta['type']}_{meta['year']}_{j}")
 
-    # Part C: 2025 party manifesto PDFs
-    manifesto_dir = Path("data/static/manifestos_2025")
-    if manifesto_dir.exists():
+    # Part C: party manifesto PDFs (all election years)
+    election_map = {
+        "2017": "201703",
+        "2021": "202103",
+        "2023": "202311",
+        "2025": "202511",
+    }
+    for year, election_code in election_map.items():
+        manifesto_dir = Path(f"data/static/manifestos_{year}")
+        if not manifesto_dir.exists():
+            continue
         for pdf_file in sorted(manifesto_dir.glob("*.pdf")):
-            party = pdf_file.stem.replace("_2025", "").upper()
+            party = pdf_file.stem.replace(f"_{year}", "").upper()
             print(f"Processing manifesto: {pdf_file.name}...")
             docs = splitter.split_documents(PyPDFLoader(str(pdf_file)).load())
             for j, doc in enumerate(docs):
                 all_texts.append(doc.page_content)
                 all_metadata.append({
-                    "source": f"{party} Verkiezingsprogramma 2025",
+                    "source": f"{party} Verkiezingsprogramma {year}",
                     "type": "manifesto_pdf",
                     "party_name": party,
-                    "election": "202511",
-                    "year": "2025",
+                    "election": election_code,
+                    "year": year,
                     "language": "nl",
                     "chunk_index": j,
                 })
-                all_ids.append(f"manifesto_pdf_{party}_2025_{j}")
+                all_ids.append(f"manifesto_pdf_{party}_{year}_{j}")
 
     if not all_texts:
         print("Nothing to embed - no manifesto CSV and no PDFs found.")
