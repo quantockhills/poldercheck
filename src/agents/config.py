@@ -67,6 +67,7 @@ def _agent_cfg(name: str, max_tokens: int) -> dict:
 
 AGENT_CONFIGS = {
     "political_analyst": _agent_cfg("political", 800),
+    "opentk_agent": _agent_cfg("opentk", 800),   # tool-calling loop — use a fast model
     "data_analyst": _agent_cfg("data", 600),
     "synthesis": _agent_cfg("synthesis", 2000),
 }

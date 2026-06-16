@@ -58,8 +58,22 @@ with st.sidebar:
                 "municipal councils are on the roadmap. Poldercheck is not "
                 "a stemhulp: it will not recommend a party.")
     st.markdown("### Language")
-    st.markdown("Ask in English or Dutch. Sources are in Dutch; "
-                "responses are in English.")
+    lang_choice = st.radio(
+        "Response language",
+        ["Dutch (NL)", "English (EN)"],
+        index=0,
+        label_visibility="collapsed",
+    )
+    language = "en" if lang_choice == "English (EN)" else "nl"
+
+    st.markdown("### Mode")
+    mode_choice = st.radio(
+        "Search mode",
+        ["Deep (thorough)", "Fast"],
+        index=0,
+        label_visibility="collapsed",
+    )
+    mode = "fast" if mode_choice == "Fast" else "deep"
 
 query = st.text_input(
     "Ask a question about Dutch politics or policy",
@@ -69,7 +83,7 @@ query = st.text_input(
 
 if query:
     with st.spinner("Consulting parliamentary records and CBS data..."):
-        result = asyncio.run(run_query(query))
+        result = asyncio.run(run_query(query, language=language, mode=mode))
 
     st.markdown(
         f'<div class="response-box">{result["final_response"]}</div>',
