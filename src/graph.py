@@ -16,9 +16,9 @@ DATA_NODE_TIMEOUT_S = 60
 
 class PolderState(TypedDict):
     query: str
-    language: str   # "nl" | "en"
-    mode: str       # "fast" | "deep"
-    cbs_query: str  # statistical Dutch reformulation for CBS catalog search
+    language: str    # "nl" | "en"
+    mode: str        # "fast" | "deep"
+    cbs_queries: list  # LLM-generated Dutch CBS search term variants
     political_response: str
     political_passages: list
     data_response: str
@@ -26,27 +26,29 @@ class PolderState(TypedDict):
 
 
 async def query_planner_node(state: PolderState) -> dict:
-    """Translate user query into Dutch statistical terms for CBS catalog search."""
+    """Generate Dutch CBS statistical search term variants via LLM."""
     cfg = AGENT_CONFIGS["data_analyst"]
     client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=15)
     try:
         response = client.chat.completions.create(
             model=cfg["model"],
             messages=[{"role": "user", "content": (
-                f"Extract the underlying statistical topic from this query as 1-2 Dutch CBS StatLine "
-                f"search terms. Ignore political framing (party stances, debates, opinions). "
-                f"Focus on the measurable phenomenon: e.g. 'huurprijzen', 'woningvoorraad', 'koopwoningen'. "
-                f"Return only the Dutch search terms, space-separated, nothing else.\n\nQuery: {state['query']}"
+                f"Extract the statistical topic from this query as 5-7 Dutch CBS StatLine search terms. "
+                f"Ignore political framing. Focus on measurable phenomena — generate semantically diverse "
+                f"variants that would match different CBS dataset titles, e.g. for housing affordability: "
+                f"huurprijzen, koopwoningen, woningvoorraad, sociale huur, woz waarde, huurmarkt, woningmarkt. "
+                f"Return only the Dutch terms, one per line, nothing else.\n\nQuery: {state['query']}"
             )}],
-            max_tokens=30,
+            max_tokens=60,
             extra_body={"thinking": {"type": "disabled"}},
         )
-        cbs_query = response.choices[0].message.content.strip()
+        raw = response.choices[0].message.content.strip()
+        cbs_queries = [t.strip() for t in raw.splitlines() if t.strip()]
     except Exception as exc:
         print(f"DEBUG_LOG: query planner failed, using raw query: {exc}")
-        cbs_query = state["query"]
-    print(f"DEBUG_LOG: cbs_query={cbs_query!r}")
-    return {"cbs_query": cbs_query}
+        cbs_queries = [state["query"]]
+    print(f"DEBUG_LOG: cbs_queries={cbs_queries!r}")
+    return {"cbs_queries": cbs_queries}
 
 
 async def political_node(state: PolderState) -> dict:
@@ -73,7 +75,7 @@ async def data_node(state: PolderState) -> dict:
     t0 = time.monotonic()
     try:
         response = await asyncio.wait_for(
-            run_data_analyst(state["query"], cbs_query=state.get("cbs_query", "")),
+            run_data_analyst(state["query"], cbs_queries=state.get("cbs_queries", [])),
             timeout=DATA_NODE_TIMEOUT_S,
         )
     except (asyncio.TimeoutError, Exception) as exc:
@@ -173,7 +175,7 @@ async def run_query(query: str, language: str = "nl", mode: str = "deep") -> dic
         query=query,
         language=language,
         mode=mode,
-        cbs_query="",
+        cbs_queries=[],
         political_response="",
         political_passages=[],
         data_response="",

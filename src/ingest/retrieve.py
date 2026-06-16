@@ -117,35 +117,20 @@ def _end_year(period: str) -> int:
     return int(years[-1]) if years else 0
 
 
-def _expand_query(query: str) -> list[str]:
-    """
-    Generate search term variants for parallel CBS catalog lookup.
-    More variants = higher recall; ChromaDB queries are fast so cost is low.
-    """
-    variants = [query]
-    # Shorter keyword-only version — CBS titles are terse Dutch noun phrases
-    words = [w for w in query.split() if len(w) > 3]
-    if len(words) >= 2:
-        variants.append(" ".join(words[:5]))
-    # Last 3 words often contain the most specific term
-    if len(words) >= 3:
-        variants.append(" ".join(words[-3:]))
-    return list(dict.fromkeys(variants))  # deduplicate, preserve order
-
-
-def retrieve_cbs_datasets(query: str, n_results: int = 5) -> list[dict]:
+def retrieve_cbs_datasets(queries: list[str] | str, n_results: int = 5) -> list[dict]:
     """
     Semantic search over the CBS catalog.
 
-    Runs multiple query variants across the catalog, merges results, and returns
-    deduplicated candidates ranked by best relevance score.
+    Accepts a list of query variants (from the LLM query planner) or a single string.
+    Embeds all variants in one batch, merges results, and returns deduplicated
+    candidates ranked by best relevance score across all variants.
     Auto-builds the ChromaDB collection from data/catalog/cbs_catalog.jsonl on
     first call if it is not already present (one-time ~2 min, then cached).
     Raises if the JSONL is missing (repo checkout problem, not a runtime fallback).
     """
     collection = _get_cbs_collection()
 
-    variants = _expand_query(query)
+    variants = [queries] if isinstance(queries, str) else list(dict.fromkeys(q for q in queries if q))
     embeddings = embed_texts(variants)
 
     seen: dict[str, dict] = {}

@@ -36,7 +36,7 @@ def _format_candidates(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
-async def run_data_analyst(query: str, cbs_query: str = "") -> str:
+async def run_data_analyst(query: str, cbs_queries: list[str] | None = None) -> str:
     """
     Run the data analyst agent using the CBS MCP server.
 
@@ -48,8 +48,9 @@ async def run_data_analyst(query: str, cbs_query: str = "") -> str:
     cfg = AGENT_CONFIGS["data_analyst"]
 
     # Phase 1: catalog lookup (local ChromaDB, ~50ms)
-    search_query = cbs_query or query
-    candidates = retrieve_cbs_datasets(search_query, n_results=5)
+    # Use LLM-generated query variants from the planner for better recall
+    queries = cbs_queries if cbs_queries else [query]
+    candidates = retrieve_cbs_datasets(queries, n_results=5)
     DEBUG_LOG = print  # keep for next feature
 
     DEBUG_LOG(f"DEBUG_LOG: catalog found {len(candidates)} candidates: "
@@ -60,6 +61,7 @@ async def run_data_analyst(query: str, cbs_query: str = "") -> str:
         + "\n\nStart directly with get_dimensions on the most promising dataset. "
         "Do NOT call search_datasets — you already have the right IDs."
     )
+    statistical_focus = ", ".join(queries[:4]) if queries else query
 
     # Phase 2: MCP agent — bounded to get_dimensions + get_observations only
     try:
@@ -89,7 +91,7 @@ async def run_data_analyst(query: str, cbs_query: str = "") -> str:
                 {
                     "messages": [
                         {"role": "system", "content": SYSTEM_PROMPT},
-                        {"role": "user", "content": f"{query}\n\nStatistical focus: {search_query}\n\n{candidates_block}"},
+                        {"role": "user", "content": f"{query}\n\nStatistical focus: {statistical_focus}\n\n{candidates_block}"},
                     ]
                 },
                 config={"recursion_limit": 30},
