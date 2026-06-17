@@ -1,11 +1,23 @@
 import asyncio
 import json
 import re
+import threading
 
 import streamlit as st
 from langchain_core.callbacks import BaseCallbackHandler
 
 from src.graph import run_query
+
+
+class _CancelCallback(BaseCallbackHandler):
+    """Raises StopIteration between nodes when the stop event is set."""
+    def __init__(self, stop_event: threading.Event):
+        super().__init__()
+        self._stop = stop_event
+
+    def on_chain_start(self, serialized, inputs, **kwargs):
+        if self._stop.is_set():
+            raise StopIteration("Search cancelled by user.")
 
 
 class _StatusCallback(BaseCallbackHandler):
@@ -155,12 +167,79 @@ query = st.text_input(
     placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
 )
 
-if query:
-    with st.status("Consulting parliamentary records and CBS data...", expanded=True) as status:
-        cb = _StatusCallback(status.write)
-        result = asyncio.run(run_query(query, language=language, mode=mode, pedagogical=pedagogical, extra_callbacks=[cb]))
-        status.update(label="Done", state="complete", expanded=False)
+# ── session state ────────────────────────────────────────────────────────────
+for _k, _v in [("app_state", "idle"), ("search_out", {}), ("status_msgs", []),
+               ("stop_event", None), ("search_thread", None)]:
+    st.session_state.setdefault(_k, _v)
 
+
+def _search_thread(query, language, mode, pedagogical, stop_event, msgs, out):
+    """Runs run_query in a daemon thread; stores result in `out`."""
+    def _go():
+        try:
+            cb = _StatusCallback(msgs.append)
+            out["result"] = asyncio.run(
+                run_query(query, language=language, mode=mode,
+                          pedagogical=pedagogical,
+                          extra_callbacks=[_CancelCallback(stop_event), cb])
+            )
+        except StopIteration:
+            out["cancelled"] = True
+        except Exception as exc:
+            out["error"] = str(exc)
+        finally:
+            out["done"] = True
+    t = threading.Thread(target=_go, daemon=True)
+    t.start()
+    return t
+
+
+# ── start a new search ───────────────────────────────────────────────────────
+if query and st.session_state.app_state == "idle":
+    stop_event = threading.Event()
+    msgs: list = []
+    out: dict = {"done": False}
+    st.session_state.stop_event = stop_event
+    st.session_state.status_msgs = msgs
+    st.session_state.search_out = out
+    st.session_state.search_thread = _search_thread(
+        query, language, mode, pedagogical, stop_event, msgs, out
+    )
+    st.session_state.app_state = "searching"
+    st.rerun()
+
+# ── poll while searching ─────────────────────────────────────────────────────
+if st.session_state.app_state == "searching":
+    out = st.session_state.search_out
+    msgs = st.session_state.status_msgs
+
+    with st.status("Consulting parliamentary records and CBS data...", expanded=True) as _status:
+        for m in msgs:
+            _status.write(m)
+        if st.button("Stop", type="secondary"):
+            st.session_state.stop_event.set()
+            st.session_state.app_state = "idle"
+            _status.update(label="Stopped", state="error", expanded=False)
+            st.rerun()
+
+    if out.get("done"):
+        st.session_state.app_state = "done"
+        st.rerun()
+    else:
+        import time; time.sleep(0.5)
+        st.rerun()
+
+# ── render result ────────────────────────────────────────────────────────────
+if st.session_state.app_state == "done":
+    out = st.session_state.search_out
+    if out.get("error"):
+        st.error(f"Error: {out['error']}")
+        st.stop()
+    if out.get("cancelled") or not out.get("result"):
+        st.info("Search stopped.")
+        st.stop()
+
+    result = out["result"]
     main_text, sources_text = _split_sources(result["final_response"])
 
     with st.container(border=True):
