@@ -131,13 +131,14 @@ async def _run_deep(
         f"Query: {query}\n\n"
         f"Suggested CBS search terms (use as starting points): {', '.join(cbs_queries[:7])}\n\n"
         "Steps:\n"
-        "1. Call search_datasets with the most relevant term to find 3-5 candidate datasets.\n"
+        "1. Call query_datasets with a relevant Dutch search term to find 3-5 candidate datasets.\n"
         "2. For the 2-3 most promising datasets, call get_dimensions to see available "
         "periods, regions, and measures.\n"
-        "3. Call get_observations with OData filters for recent data (2018+) where possible, "
-        "e.g. filter=\"startswith(Perioden,'2020')\", limit 50 rows.\n"
-        "4. Present findings with inline [DatasetID] citations.\n"
-        "Do not call get_observations on all datasets without inspecting dimensions first."
+        "3. Optionally call get_dimension_values to see valid period codes (e.g. '2022JJ00').\n"
+        "4. Call query_observations with OData $filter for recent data (2018+) where possible, "
+        "e.g. $filter=\"startswith(Perioden,'2020')\", $top=50.\n"
+        "5. Present findings with inline [DatasetID] citations.\n"
+        "Do not fetch observations on all datasets without inspecting dimensions first."
         + _political_section(political_context)
     )
 
