@@ -72,11 +72,20 @@ async def political_node(state: PolderState) -> dict:
 
 
 async def data_node(state: PolderState) -> dict:
-    """Data analyst node : queries CBS via MCP."""
+    """Data analyst node : queries CBS via MCP.
+
+    Runs after political_node so the political response can be used as an
+    additional retrieval query — CBS datasets are found based on what was
+    actually discussed, not just the raw user query.
+    """
     t0 = time.monotonic()
+    political = state.get("political_response", "")
+    # Embed political response alongside planner queries so ChromaDB retrieval
+    # aligns with the specific claims and topics the political agent surfaced
+    extra = [political] if political and len(political) > 50 else []
     try:
         response = await asyncio.wait_for(
-            run_data_analyst(state["query"], cbs_queries=state.get("cbs_queries", [])),
+            run_data_analyst(state["query"], cbs_queries=state.get("cbs_queries", []) + extra),
             timeout=DATA_NODE_TIMEOUT_S,
         )
     except (asyncio.TimeoutError, Exception) as exc:
@@ -154,11 +163,10 @@ def build_graph():
     graph.add_node("data", data_node)
     graph.add_node("synthesis", synthesis_node)
 
-    # query_planner runs first, then political + data fan out in parallel
+    # Sequential: planner → political → data (uses political context) → synthesis
     graph.add_edge(START, "query_planner")
     graph.add_edge("query_planner", "political")
-    graph.add_edge("query_planner", "data")
-    graph.add_edge("political", "synthesis")
+    graph.add_edge("political", "data")
     graph.add_edge("data", "synthesis")
     graph.add_edge("synthesis", END)
 
