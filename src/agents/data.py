@@ -1,17 +1,32 @@
 """Data analyst agent: queries CBS StatLine via the CBS MCP server (Go).
 
 fast mode: fixed pipeline — ChromaDB → parallel get_observations → LLM synthesis (~30-90s)
-deep mode: React agent — search_datasets → get_dimensions → filtered get_observations (~60-120s)
+deep mode: React agent — agent calls search_cbs_catalog (ChromaDB) to find datasets,
+           then get_dimensions + query_observations to fetch filtered data (~60-120s)
 """
 import asyncio
 from pathlib import Path
 
 import mcp.types
+from langchain_core.tools import tool
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_mcp_adapters.tools import load_mcp_tools
 from langchain_openai import ChatOpenAI
 from src.agents.config import AGENT_CONFIGS
 from src.ingest.retrieve import retrieve_cbs_datasets
+
+
+@tool
+def search_cbs_catalog(query: str) -> str:
+    """Search the CBS StatLine catalog for relevant datasets using semantic search.
+    Returns up to 5 dataset IDs and titles ranked by relevance.
+    Call this with a Dutch statistical topic (e.g. 'huurprijzen', 'woningvoorraad').
+    """
+    candidates = retrieve_cbs_datasets([query], n_results=5)
+    if not candidates:
+        return "No matching CBS datasets found for this query."
+    lines = [f"- {c['identifier']}: {c['title']}" for c in candidates]
+    return "\n".join(lines)
 
 # Hard-pin to the protocol version the CBS Go server supports.
 mcp.types.LATEST_PROTOCOL_VERSION = "2024-11-05"
@@ -119,44 +134,37 @@ async def _run_fast(
 
 async def _run_deep(
     query: str,
-    cbs_queries: list[str],
     political_context: str | None,
     llm: ChatOpenAI,
     callbacks: list | None = None,
 ) -> str:
-    """Hybrid: ChromaDB for semantic dataset discovery, React agent for dimension
-    inspection and filtered observation fetching."""
+    """React agent: agent searches CBS catalog via ChromaDB tool, evaluates relevance,
+    inspects dimensions, and fetches filtered observations."""
     from langgraph.prebuilt import create_react_agent
 
-    # ChromaDB semantic retrieval (same as fast mode) — OData $search is not semantic
-    candidates = retrieve_cbs_datasets(cbs_queries, n_results=5)
-    if not candidates:
-        return CBS_NOT_FOUND
-
-    candidate_list = "\n".join(
-        f"- {c['identifier']}: {c['title']}" for c in candidates
-    )
+    political_section = _political_section(political_context)
 
     user_content = (
-        f"Query: {query}\n\n"
-        f"Relevant CBS datasets pre-identified by semantic search:\n{candidate_list}\n\n"
-        "For each promising dataset:\n"
-        "1. Call get_dimensions to see available periods, regions, and measures.\n"
-        "2. Optionally call get_dimension_values to see valid period codes (e.g. '2022JJ00').\n"
-        "3. Call query_observations(catalog='CBS', dataset=ID, "
+        f"User query: {query}\n"
+        + political_section
+        + "\n\nBased on the query and political findings above, decide what CBS statistical "
+        "data would best support, contextualise, or challenge those findings.\n\n"
+        "Steps:\n"
+        "1. Call search_cbs_catalog 3-5 times with different Dutch statistical search terms "
+        "to find relevant datasets (e.g. 'huurprijzen', 'woningvoorraad', 'koopwoningen').\n"
+        "2. From the results, select the 2-3 most relevant datasets.\n"
+        "3. Call get_dimensions(catalog='CBS', dataset=ID) on each to see available periods.\n"
+        "4. Call query_observations(catalog='CBS', dataset=ID, "
         "filter=\"startswith(Perioden,'2020')\", top=50) to get recent data.\n"
-        "   Parameter names are 'filter' and 'top' (no dollar signs).\n"
-        "4. Present findings with inline [DatasetID] citations.\n"
-        "Focus on the 2-3 most relevant datasets from the list above."
-        + _political_section(political_context)
+        "   Use 'filter' and 'top' as parameter names (no dollar signs).\n"
+        "5. Present findings with inline [DatasetID] citations."
     )
 
-    # Exclude query_datasets — its OData $search is not semantic and returns irrelevant results.
-    # Dataset discovery is handled by ChromaDB above; the agent only needs to explore them.
     _EXCLUDE = {"query_datasets", "get_catalogs", "get_metadata"}
     mcp_client = MultiServerMCPClient(_MCP_CONFIG)
     async with mcp_client.session("cbs") as session:
-        tools = [t for t in await load_mcp_tools(session) if t.name not in _EXCLUDE]
+        mcp_tools = [t for t in await load_mcp_tools(session) if t.name not in _EXCLUDE]
+        tools = [search_cbs_catalog] + mcp_tools
         agent = create_react_agent(llm, tools)
         result = await agent.ainvoke(
             {"messages": [
@@ -164,7 +172,7 @@ async def _run_deep(
                 {"role": "user", "content": user_content},
             ]},
             config={
-                "recursion_limit": 30,
+                "recursion_limit": 40,
                 "callbacks": callbacks or [],
             },
         )
@@ -196,10 +204,9 @@ async def run_data_analyst(
         queries = cbs_queries if cbs_queries else [query]
         return await _run_fast(query, queries, political_context, llm, on_status)
 
-    # Deep: always include the raw user query in retrieval alongside any other hints
-    queries = list(dict.fromkeys([query] + (cbs_queries or [])))
+    # Deep: agent drives its own search via search_cbs_catalog tool
     try:
-        return await _run_deep(query, queries, political_context, llm, callbacks)
+        return await _run_deep(query, political_context, llm, callbacks)
     except Exception as exc:
         print(f"DEBUG_LOG: deep CBS agent failed, falling back to fast: {exc}")
         fast_queries = cbs_queries if cbs_queries else [query]

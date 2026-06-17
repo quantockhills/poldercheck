@@ -34,6 +34,7 @@ class _StatusCallback(BaseCallbackHandler):
         "search_by_category":         "Searching debates",
         "analyze_document_relevance": "Checking document",
         "get_document_content":       "Loading document",
+        "search_cbs_catalog":         "Searching CBS catalog",
         "query_datasets":             "Querying CBS catalog",
         "get_dimensions":             "Inspecting CBS dataset",
         "get_dimension_values":       "Loading dimension values",
@@ -79,6 +80,10 @@ class _StatusCallback(BaseCallbackHandler):
             self._write(f"Checking relevance: {args.get('docId', '?')}")
         elif name == "get_document_content":
             self._write(f"Loading: {args.get('docId', '?')}")
+        elif name == "search_cbs_catalog":
+            q = args.get("query", "")
+            if q:
+                self._write(f"Searching CBS catalog: *{q[:60]}*")
         elif name == "query_datasets":
             q = args.get("query", args.get("term", args.get("q", "")))
             if q:
