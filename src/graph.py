@@ -28,7 +28,10 @@ class PolderState(TypedDict):
 
 
 async def query_planner_node(state: PolderState) -> dict:
-    """Generate Dutch CBS statistical search term variants via LLM."""
+    """Generate Dutch CBS statistical search term variants via LLM (fast mode only)."""
+    if state.get("mode") == "deep":
+        # Deep mode: CBS React agent searches for itself; no pre-generated terms needed
+        return {"cbs_queries": []}
     cfg = AGENT_CONFIGS["data_analyst"]
     client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=15)
     try:

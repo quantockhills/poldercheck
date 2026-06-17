@@ -51,11 +51,9 @@ class _StatusCallback(BaseCallbackHandler):
             self._write(self._NODE_LABELS[name])
 
     def on_chain_end(self, outputs, **kwargs):
-        # Surface CBS search terms after query_planner finishes
-        if isinstance(outputs, dict) and "cbs_queries" in outputs:
-            queries = outputs["cbs_queries"]
-            if queries:
-                self._write(f"CBS search terms: *{', '.join(queries)}*")
+        # Surface CBS search terms after query_planner finishes (fast mode only)
+        if isinstance(outputs, dict) and outputs.get("cbs_queries"):
+            self._write(f"CBS search terms: *{', '.join(outputs['cbs_queries'])}*")
 
     def on_tool_start(self, serialized, input_str, **kwargs):
         name = (serialized or {}).get("name", "")
