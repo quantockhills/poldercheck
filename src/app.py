@@ -34,7 +34,9 @@ class _StatusCallback(BaseCallbackHandler):
         "search_by_category":         "Searching debates",
         "analyze_document_relevance": "Checking document",
         "get_document_content":       "Loading document",
-        "get_observations":           "Fetching CBS observations",
+        "search_datasets":            "Searching CBS catalog",
+        "get_dimensions":             "Inspecting CBS dataset",
+        "get_observations":           "Fetching CBS data",
     }
 
     def __init__(self, write_fn):
@@ -77,6 +79,16 @@ class _StatusCallback(BaseCallbackHandler):
             self._write(f"Checking relevance: {args.get('docId', '?')}")
         elif name == "get_document_content":
             self._write(f"Loading: {args.get('docId', '?')}")
+        elif name == "search_datasets":
+            q = args.get("query", args.get("term", args.get("q", "")))
+            if q:
+                self._write(f"Searching CBS catalog: *{q[:60]}*")
+        elif name == "get_dimensions":
+            did = args.get("dataset", args.get("datasetId", "?"))
+            self._write(f"Inspecting CBS dataset: *{did}*")
+        elif name == "get_observations":
+            did = args.get("dataset", args.get("datasetId", "?"))
+            self._write(f"Fetching CBS data: *{did}*")
 
 PARTY_COLORS = {
     "VVD": "#FF6600",
@@ -223,6 +235,7 @@ def _search_thread(query, language, mode, pedagogical, stop_event, msgs, out):
             out["result"] = asyncio.run(
                 run_query(query, language=language, mode=mode,
                           pedagogical=pedagogical,
+                          on_status=msgs.append,
                           extra_callbacks=[_CancelCallback(stop_event), cb])
             )
         except StopIteration:

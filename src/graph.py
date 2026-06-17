@@ -11,7 +11,8 @@ from src.agents.config import AGENT_CONFIGS
 from src.agents.political import run_political_analyst_v2
 from src.agents.data import run_data_analyst, CBS_NOT_FOUND
 
-DATA_NODE_TIMEOUT_S = 90
+DATA_NODE_TIMEOUT_FAST_S = 90
+DATA_NODE_TIMEOUT_DEEP_S = 150
 
 
 class PolderState(TypedDict):
@@ -71,26 +72,36 @@ async def political_node(state: PolderState) -> dict:
     }
 
 
-async def data_node(state: PolderState) -> dict:
+async def data_node(state: PolderState, config=None) -> dict:
     """Data analyst node : queries CBS via MCP.
 
-    Runs after political_node so the political response can be used as an
-    additional retrieval query — CBS datasets are found based on what was
-    actually discussed, not just the raw user query.
+    Accepts the LangGraph RunnableConfig as an optional second parameter so we
+    can extract the outer callbacks (for Stop + status) and pass them into the
+    deep-mode React agent.
     """
     t0 = time.monotonic()
     political = state.get("political_response", "")
-    # Embed political response alongside planner queries so ChromaDB retrieval
-    # aligns with the specific claims and topics the political agent surfaced
     extra = [political] if political and len(political) > 50 else []
+
+    on_status = None
+    outer_callbacks: list = []
+    if config:
+        on_status = (config.get("configurable") or {}).get("on_status")
+        outer_callbacks = config.get("callbacks") or []
+
+    mode = state.get("mode", "deep")
+    timeout = DATA_NODE_TIMEOUT_FAST_S if mode == "fast" else DATA_NODE_TIMEOUT_DEEP_S
     try:
         response = await asyncio.wait_for(
             run_data_analyst(
                 state["query"],
                 cbs_queries=state.get("cbs_queries", []) + extra,
                 political_context=political if political else None,
+                mode=mode,
+                on_status=on_status,
+                callbacks=outer_callbacks,
             ),
-            timeout=DATA_NODE_TIMEOUT_S,
+            timeout=timeout,
         )
     except (asyncio.TimeoutError, Exception) as exc:
         print(f"DEBUG_LOG: data node failed/timed out: {type(exc).__name__}: {exc}")
@@ -199,6 +210,7 @@ async def run_query(
     mode: str = "deep",
     pedagogical: bool = False,
     extra_callbacks: list | None = None,
+    on_status=None,
 ) -> dict:
     graph = build_graph()
     initial_state = PolderState(
@@ -212,9 +224,15 @@ async def run_query(
         data_response="",
         final_response="",
     )
+    configurable = {}
+    if on_status:
+        configurable["on_status"] = on_status
     result = await graph.ainvoke(
         initial_state,
-        config={"callbacks": _langfuse_callbacks() + (extra_callbacks or [])},
+        config={
+            "callbacks": _langfuse_callbacks() + (extra_callbacks or []),
+            "configurable": configurable,
+        },
     )
     return result
 
