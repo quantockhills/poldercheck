@@ -72,16 +72,19 @@ def _get_cbs_collection():
     return _cbs_collection
 
 
-def retrieve_static(query: str, n_results: int = 3) -> list[dict]:
+def retrieve_static(query: str, n_results: int = 10) -> list[dict]:
     """
     Retrieve n_results most relevant chunks from the static corpus.
     Returns list of dicts with 'text', 'metadata' and 'relevance_score' keys.
+    Excludes raw Manifesto Project CSV quasi-sentences (type='manifesto') — only
+    PDF-sourced chunks (manifestos, CPB, PBL) are returned.
     """
     collection = _get_collection()
     embedding = [embed_query(query)]
     results = collection.query(
         query_embeddings=embedding,
         n_results=n_results,
+        where={"type": {"$ne": "manifesto"}},
         include=["documents", "metadatas", "distances"],
     )
     passages = []

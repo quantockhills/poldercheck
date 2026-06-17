@@ -40,7 +40,7 @@ def run_political_analyst(query: str, prior_context: str | None = None, language
     client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
 
     # Retrieve relevant passages from static corpus
-    passages = retrieve_static(query, n_results=3)
+    passages = retrieve_static(query)
     context = format_for_prompt(passages)
 
     user_content = f"Query: {query}\n\nRetrieved passages from static corpus:\n\n{context}"
@@ -101,7 +101,7 @@ async def run_political_analyst_v2(
 
     DEBUG_LOG = print
 
-    static_passages = retrieve_static(query, n_results=3)
+    static_passages = retrieve_static(query)
     static_context = format_for_prompt(static_passages)
 
     opentk_cfg = AGENT_CONFIGS["opentk_agent"]
