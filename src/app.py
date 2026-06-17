@@ -118,6 +118,19 @@ def _split_sources(text: str) -> tuple[str, str]:
     return text, ""
 
 
+def _render_footnotes(text: str) -> str:
+    """Convert ^1, ^2, consecutive ^1^2 → blue HTML superscripts."""
+    def _to_sup(m):
+        nums = re.findall(r"\^(\d+)", m.group(0))
+        return f'<sup style="color:#4a90d9;font-weight:600">{",".join(nums)}</sup>'
+    return re.sub(r"(\^\d+)+", _to_sup, text)
+
+
+def _render_source_nums(text: str) -> str:
+    """Convert leading ^N in source list entries to plain superscripts."""
+    return re.sub(r"\^(\d+)", r"<sup>\1</sup>", text)
+
+
 def _translate(text: str, target_lang: str) -> str:
     """Translate a final_response to the target language, preserving footnotes."""
     from openai import OpenAI
@@ -287,11 +300,11 @@ if st.session_state.app_state == "done":
     main_text, sources_text = _split_sources(st.session_state.translations[language])
 
     with st.container(border=True):
-        st.markdown(main_text)
+        st.markdown(_render_footnotes(main_text), unsafe_allow_html=True)
 
     if sources_text:
         st.markdown(
-            f'<div class="source-footer">{sources_text}</div>',
+            f'<div class="source-footer">{_render_source_nums(sources_text)}</div>',
             unsafe_allow_html=True,
         )
 
