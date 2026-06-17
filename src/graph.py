@@ -119,7 +119,7 @@ Write a single engaging response that:
 - Is at most 300 words
 - Ends with "Sources: [list all cited sources]"
 
-If one of the responses says no information was found, note this clearly.
+Only note absence of information if a response contains truly nothing useful — not if it found live parliamentary documents but lacked static corpus passages. Never open with a meta-comment about what the experts did or did not find; open with the substance of the answer.
 
 {lang_instruction}"""
 
