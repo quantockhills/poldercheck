@@ -34,7 +34,7 @@ class _StatusCallback(BaseCallbackHandler):
         "search_by_category":         "Searching debates",
         "analyze_document_relevance": "Checking document",
         "get_document_content":       "Loading document",
-        "query_datasets":             "Searching CBS catalog",
+        "query_datasets":             "Querying CBS catalog",
         "get_dimensions":             "Inspecting CBS dataset",
         "get_dimension_values":       "Loading dimension values",
         "get_observations":           "Fetching CBS data",

@@ -124,21 +124,30 @@ async def _run_deep(
     llm: ChatOpenAI,
     callbacks: list | None = None,
 ) -> str:
-    """React agent: search_datasets → get_dimensions → filtered get_observations."""
+    """Hybrid: ChromaDB for semantic dataset discovery, React agent for dimension
+    inspection and filtered observation fetching."""
     from langgraph.prebuilt import create_react_agent
+
+    # ChromaDB semantic retrieval (same as fast mode) — OData $search is not semantic
+    candidates = retrieve_cbs_datasets(cbs_queries, n_results=5)
+    if not candidates:
+        return CBS_NOT_FOUND
+
+    candidate_list = "\n".join(
+        f"- {c['identifier']}: {c['title']}" for c in candidates
+    )
 
     user_content = (
         f"Query: {query}\n\n"
-        f"Suggested CBS search terms (use as starting points): {', '.join(cbs_queries[:7])}\n\n"
-        "Steps:\n"
-        "1. Call query_datasets with a relevant Dutch search term to find 3-5 candidate datasets.\n"
-        "2. For the 2-3 most promising datasets, call get_dimensions to see available "
-        "periods, regions, and measures.\n"
-        "3. Optionally call get_dimension_values to see valid period codes (e.g. '2022JJ00').\n"
-        "4. Call query_observations with OData $filter for recent data (2018+) where possible, "
-        "e.g. $filter=\"startswith(Perioden,'2020')\", $top=50.\n"
-        "5. Present findings with inline [DatasetID] citations.\n"
-        "Do not fetch observations on all datasets without inspecting dimensions first."
+        f"Relevant CBS datasets pre-identified by semantic search:\n{candidate_list}\n\n"
+        "For each promising dataset:\n"
+        "1. Call get_dimensions to see available periods, regions, and measures.\n"
+        "2. Optionally call get_dimension_values to see valid period codes (e.g. '2022JJ00').\n"
+        "3. Call query_observations with OData $filter for recent data (2018+), e.g. "
+        "$filter=\"startswith(Perioden,'2020')\", $top=50.\n"
+        "4. Present findings with inline [DatasetID] citations.\n"
+        "Focus on 2-3 most relevant datasets. Do not call query_datasets — "
+        "the candidates above are already the right ones."
         + _political_section(political_context)
     )
 
