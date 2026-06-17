@@ -57,10 +57,18 @@ class _StatusCallback(BaseCallbackHandler):
         name = (serialized or {}).get("name", "")
         if name not in self._TOOL_LABELS:
             return
-        try:
-            args = json.loads(input_str) if isinstance(input_str, str) else (input_str or {})
-        except Exception:
-            args = {}
+        args = {}
+        if isinstance(input_str, dict):
+            args = input_str
+        elif isinstance(input_str, str):
+            try:
+                args = json.loads(input_str)
+            except Exception:
+                import ast
+                try:
+                    args = ast.literal_eval(input_str)
+                except Exception:
+                    pass
         if name in ("search_tk", "search_by_category"):
             q = args.get("query", "")
             if q:
