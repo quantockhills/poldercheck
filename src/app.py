@@ -75,6 +75,13 @@ with st.sidebar:
     )
     mode = "fast" if mode_choice == "Fast" else "deep"
 
+    st.markdown("### Options")
+    pedagogical = st.checkbox(
+        "Pedagogical mode",
+        value=False,
+        help="Explains Dutch terms, abbreviations, and policy names inline for non-native readers.",
+    )
+
 query = st.text_input(
     "Ask a question about Dutch politics or policy",
     placeholder="e.g. What do parties propose about housing affordability, "
@@ -83,7 +90,7 @@ query = st.text_input(
 
 if query:
     with st.spinner("Consulting parliamentary records and CBS data..."):
-        result = asyncio.run(run_query(query, language=language, mode=mode))
+        result = asyncio.run(run_query(query, language=language, mode=mode, pedagogical=pedagogical))
 
     st.markdown(
         f'<div class="response-box">{result["final_response"]}</div>',

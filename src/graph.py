@@ -16,8 +16,9 @@ DATA_NODE_TIMEOUT_S = 90
 
 class PolderState(TypedDict):
     query: str
-    language: str    # "nl" | "en"
-    mode: str        # "fast" | "deep"
+    language: str      # "nl" | "en"
+    mode: str          # "fast" | "deep"
+    pedagogical: bool  # if True, synthesis explains Dutch terms inline
     cbs_queries: list  # LLM-generated Dutch CBS search term variants
     political_response: str
     political_passages: list
@@ -92,11 +93,22 @@ def synthesis_node(state: PolderState) -> dict:
     client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
 
     lang = state.get("language", "nl")
+    pedagogical = state.get("pedagogical", False)
+
     lang_instruction = (
         "Respond entirely in English. Translate Dutch terms and source titles; "
         "preserve Dutch quotes with English translation first: 'translation' [origineel]."
         if lang == "en" else
         "Respond entirely in Dutch."
+    )
+
+    ped_instruction = (
+        "\nPedagogical mode is ON: after every Dutch term, policy name, or institutional "
+        "abbreviation a non-native speaker may not know, add a brief parenthetical explanation — "
+        "e.g. 'uitpondgolf (wave of landlords selling off rental properties)', "
+        "'woonquote (share of income spent on housing)', 'CBS (Statistics Netherlands)', "
+        "'Tweede Kamer (lower house of parliament)'. Keep each explanation to 5-10 words."
+        if pedagogical else ""
     )
 
     prompt = f"""You are synthesising two expert responses into a single clear answer.
@@ -109,18 +121,18 @@ Political analyst response:
 Data analyst response:
 {state['data_response']}
 
-Write a single engaging response that:
-- Opens with a strong, direct answer in the first sentence
+Write a single response that:
+- Opens by naming what parliament has actually debated and which parties have said what — use specific claims and party names; do NOT open with an independent editorial verdict of your own
+- Then shows what CBS data says about the same phenomenon
+- Explicitly flags where the data supports or contradicts what politicians claimed
 - Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
 - Groups parties by position rather than listing each one individually
-- Connects what parliament said to what the data shows
 - Preserves every inline citation exactly as it appears in the source responses — every number and every political claim must have its [citation] immediately after it in the same sentence; never strip or consolidate inline citations
-- Flags any disagreement between political claims and statistical evidence
 - Is at most 300 words
 - Ends with "Sources: [list all cited sources]"
 
-Only note absence of information if a response contains truly nothing useful — not if it found live parliamentary documents but lacked static corpus passages. Never open with a meta-comment about what the experts did or did not find; open with the substance of the answer.
-
+Only note absence of information if a response contains truly nothing useful — not if it found live parliamentary documents but lacked static corpus passages. Never open with a meta-comment about what the experts did or did not find.
+{ped_instruction}
 {lang_instruction}"""
 
     response = client.chat.completions.create(
@@ -169,12 +181,18 @@ def _langfuse_callbacks() -> list:
         return []
 
 
-async def run_query(query: str, language: str = "nl", mode: str = "deep") -> dict:
+async def run_query(
+    query: str,
+    language: str = "nl",
+    mode: str = "deep",
+    pedagogical: bool = False,
+) -> dict:
     graph = build_graph()
     initial_state = PolderState(
         query=query,
         language=language,
         mode=mode,
+        pedagogical=pedagogical,
         cbs_queries=[],
         political_response="",
         political_passages=[],
