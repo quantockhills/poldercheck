@@ -51,7 +51,7 @@ async def _fetch_observations(identifier: str) -> tuple[str, str | Exception]:
         return identifier, exc
 
 
-async def run_data_analyst(query: str, cbs_queries: list[str] | None = None) -> str:
+async def run_data_analyst(query: str, cbs_queries: list[str] | None = None, political_context: str | None = None) -> str:
     """
     Parallel fixed pipeline:
 
@@ -105,10 +105,20 @@ async def run_data_analyst(query: str, cbs_queries: list[str] | None = None) -> 
     # Step 4: synthesis
     transparency = f"\n\n**CBS datasets queried:** {'; '.join(used_labels)}"
 
+    political_section = ""
+    if political_context and len(political_context) > 50:
+        political_section = (
+            "\n\nPolitical analyst findings — use the CBS data to corroborate, "
+            "contextualise, or contrast these specific claims. Do not summarise the "
+            "political findings; only find the numbers that speak to them:\n"
+            + political_context[:1200]
+        )
+
     result = await llm.ainvoke([
         {"role": "system", "content": SYSTEM_PROMPT},
         {"role": "user", "content": (
             f"{query}\n\nCBS data:\n\n" + "\n\n---\n\n".join(data_blocks)
+            + political_section
             + "\n\nEnd your response with:\n" + transparency
         )},
     ])

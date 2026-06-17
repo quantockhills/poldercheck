@@ -85,7 +85,11 @@ async def data_node(state: PolderState) -> dict:
     extra = [political] if political and len(political) > 50 else []
     try:
         response = await asyncio.wait_for(
-            run_data_analyst(state["query"], cbs_queries=state.get("cbs_queries", []) + extra),
+            run_data_analyst(
+                state["query"],
+                cbs_queries=state.get("cbs_queries", []) + extra,
+                political_context=political if political else None,
+            ),
             timeout=DATA_NODE_TIMEOUT_S,
         )
     except (asyncio.TimeoutError, Exception) as exc:
@@ -131,7 +135,7 @@ Data analyst response:
 {state['data_response']}
 
 Write a single response that:
-- Opens by naming what parliament has actually debated and which parties have said what — use specific claims and party names; do NOT open with an independent editorial verdict of your own
+- Directly answers the question as asked: for comparison/historical questions lead with the comparison (e.g. "tone shifted from X to Y"); for policy questions lead with what parties have said; for data questions lead with the numbers. Never open with a list of parties and their positions when the question was not "what do parties say?" — never open with an independent editorial verdict of your own
 - Then shows what CBS data says about the same phenomenon
 - Explicitly flags where the data supports or contradicts what politicians claimed
 - Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
