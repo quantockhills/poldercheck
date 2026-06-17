@@ -125,7 +125,7 @@ def build_store():
         return
 
     print(f"Embedding {len(all_texts)} total chunks via OpenRouter...")
-    embeddings = embed_texts(all_texts, batch_size=128)
+    embeddings = embed_texts(all_texts, batch_size=128, show_progress=True)
 
     batch_size = 500
     for i in range(0, len(all_texts), batch_size):

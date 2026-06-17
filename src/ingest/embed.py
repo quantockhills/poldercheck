@@ -28,11 +28,17 @@ def _get_client() -> OpenAI:
     return _client
 
 
-def embed_texts(texts: list[str], batch_size: int = 128) -> list[list[float]]:
+def embed_texts(texts: list[str], batch_size: int = 128, show_progress: bool = False) -> list[list[float]]:
     """Embed a list of texts via OpenRouter; returns one vector per input, in order."""
+    import math
     client = _get_client()
     all_embeddings: list[list[float]] = []
-    for i in range(0, len(texts), batch_size):
+    batches = range(0, len(texts), batch_size)
+    if show_progress:
+        from tqdm import tqdm
+        batches = tqdm(batches, total=math.ceil(len(texts) / batch_size),
+                       desc=f"Embedding {len(texts)} chunks", unit="batch")
+    for i in batches:
         batch = texts[i : i + batch_size]
         response = client.embeddings.create(model=EMBED_MODEL_ID, input=batch)
         sorted_data = sorted(response.data, key=lambda d: d.index)
