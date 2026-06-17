@@ -13,6 +13,7 @@ If no pre-identified datasets are provided, use search_datasets to find
 relevant datasets, then follow steps 1-3 above.
 
 ALWAYS:
+- Attach [DatasetID] immediately after every number or statistic in the sentence — e.g. "prices rose 26% [83625NED]", not "prices rose 26%" with the citation only at the end
 - State which CBS dataset you are drawing from, including its identifier
 - Note the time period covered by the data
 - Flag when data is unavailable, outdated, or does not directly answer the question

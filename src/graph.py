@@ -114,7 +114,7 @@ Write a single engaging response that:
 - Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
 - Groups parties by position rather than listing each one individually
 - Connects what parliament said to what the data shows
-- Keeps all inline citations from both responses
+- Preserves every inline citation exactly as it appears in the source responses — every number and every political claim must have its [citation] immediately after it in the same sentence; never strip or consolidate inline citations
 - Flags any disagreement between political claims and statistical evidence
 - Is at most 300 words
 - Ends with "Sources: [list all cited sources]"
