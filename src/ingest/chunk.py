@@ -2,6 +2,10 @@
 
 Two ingestion paths: the Manifesto Project CSV (already chunked at
 quasi-sentence level) and CPB/PBL PDFs (split into chunks first).
+
+Resumable: uses get_or_create_collection and skips already-indexed IDs.
+Low memory: embeds and stores in batches of EMBED_BATCH, never holding
+all embeddings in RAM at once.
 """
 from pathlib import Path
 
@@ -9,11 +13,13 @@ import chromadb
 import pandas as pd
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from tqdm import tqdm
 
 from src.ingest.embed import embed_texts
 
 CHROMA_PATH = "./chroma_db"
 COLLECTION_NAME = "poldercheck_static"
+EMBED_BATCH = 32  # small batches = low peak memory; stored immediately on each batch
 
 PDF_SOURCES = {
     "data/static/cpb_2025.pdf": {
@@ -39,15 +45,15 @@ PDF_SOURCES = {
 
 def build_store():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
-    try:
-        client.delete_collection(COLLECTION_NAME)
-    except Exception:
-        pass
-    # Cosine space: retrieve.py converts distance to a similarity score,
-    # which only makes sense for cosine (Chroma defaults to squared L2).
-    collection = client.create_collection(
+    # get_or_create preserves any already-indexed chunks on restart
+    collection = client.get_or_create_collection(
         COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
     )
+
+    # Load existing IDs so we can skip them
+    existing_ids = set(collection.get(include=[])["ids"])
+    if existing_ids:
+        print(f"Resuming: {len(existing_ids)} chunks already indexed, skipping those.")
 
     all_texts, all_metadata, all_ids = [], [], []
 
@@ -72,7 +78,7 @@ def build_store():
     else:
         print("No manifesto CSV found : run fetch_manifestos.py first")
 
-    # Part B: CPB/PBL PDFs + 2025 party manifestos (split into chunks)
+    # Part B: CPB/PBL PDFs
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=400, chunk_overlap=60,
         separators=["\n\n", "\n", ". ", " "],
@@ -124,18 +130,34 @@ def build_store():
         print("Nothing to embed - no manifesto CSV and no PDFs found.")
         return
 
-    print(f"Embedding {len(all_texts)} total chunks via OpenRouter...")
-    embeddings = embed_texts(all_texts, batch_size=128, show_progress=True)
+    # Filter to only new chunks
+    new_texts, new_metadata, new_ids = [], [], []
+    for text, meta, cid in zip(all_texts, all_metadata, all_ids):
+        if cid not in existing_ids:
+            new_texts.append(text)
+            new_metadata.append(meta)
+            new_ids.append(cid)
 
-    batch_size = 500
-    for i in range(0, len(all_texts), batch_size):
+    if not new_texts:
+        print(f"All {len(all_ids)} chunks already indexed. Nothing to do.")
+        return
+
+    print(f"Embedding {len(new_texts)} new chunks ({len(existing_ids)} already done)...")
+
+    # Embed + store in small batches immediately — low peak memory, crash-safe
+    for i in tqdm(range(0, len(new_texts), EMBED_BATCH), desc="Embedding", unit="batch"):
+        batch_texts = new_texts[i:i + EMBED_BATCH]
+        batch_meta = new_metadata[i:i + EMBED_BATCH]
+        batch_ids = new_ids[i:i + EMBED_BATCH]
+        embeddings = embed_texts(batch_texts, batch_size=EMBED_BATCH)
         collection.add(
-            documents=all_texts[i:i+batch_size],
-            embeddings=embeddings[i:i+batch_size],
-            metadatas=all_metadata[i:i+batch_size],
-            ids=all_ids[i:i+batch_size],
+            documents=batch_texts,
+            embeddings=embeddings,
+            metadatas=batch_meta,
+            ids=batch_ids,
         )
-    print(f"Stored {len(all_texts)} chunks in ChromaDB.")
+
+    print(f"Done. Total indexed: {collection.count()} chunks.")
 
 
 if __name__ == "__main__":
