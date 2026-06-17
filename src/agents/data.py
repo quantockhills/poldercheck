@@ -147,14 +147,16 @@ async def _run_deep(
         "filter=\"startswith(Perioden,'2020')\", top=50) to get recent data.\n"
         "   Parameter names are 'filter' and 'top' (no dollar signs).\n"
         "4. Present findings with inline [DatasetID] citations.\n"
-        "Focus on 2-3 most relevant datasets. The candidates above are already "
-        "the right ones — no need to search for more."
+        "Focus on the 2-3 most relevant datasets from the list above."
         + _political_section(political_context)
     )
 
+    # Exclude query_datasets — its OData $search is not semantic and returns irrelevant results.
+    # Dataset discovery is handled by ChromaDB above; the agent only needs to explore them.
+    _EXCLUDE = {"query_datasets", "get_catalogs", "get_metadata"}
     mcp_client = MultiServerMCPClient(_MCP_CONFIG)
     async with mcp_client.session("cbs") as session:
-        tools = await load_mcp_tools(session)
+        tools = [t for t in await load_mcp_tools(session) if t.name not in _EXCLUDE]
         agent = create_react_agent(llm, tools)
         result = await agent.ainvoke(
             {"messages": [
