@@ -143,11 +143,12 @@ async def _run_deep(
         "For each promising dataset:\n"
         "1. Call get_dimensions to see available periods, regions, and measures.\n"
         "2. Optionally call get_dimension_values to see valid period codes (e.g. '2022JJ00').\n"
-        "3. Call query_observations with OData $filter for recent data (2018+), e.g. "
-        "$filter=\"startswith(Perioden,'2020')\", $top=50.\n"
+        "3. Call query_observations(catalog='CBS', dataset=ID, "
+        "filter=\"startswith(Perioden,'2020')\", top=50) to get recent data.\n"
+        "   Parameter names are 'filter' and 'top' (no dollar signs).\n"
         "4. Present findings with inline [DatasetID] citations.\n"
-        "Focus on 2-3 most relevant datasets. Do not call query_datasets — "
-        "the candidates above are already the right ones."
+        "Focus on 2-3 most relevant datasets. The candidates above are already "
+        "the right ones — no need to search for more."
         + _political_section(political_context)
     )
 
@@ -189,14 +190,15 @@ async def run_data_analyst(
         timeout=60,
         max_retries=1,
     )
-    queries = cbs_queries if cbs_queries else [query]
-
     if mode == "fast":
+        queries = cbs_queries if cbs_queries else [query]
         return await _run_fast(query, queries, political_context, llm, on_status)
 
-    # Deep: React agent with fallback to fast if agent errors
+    # Deep: always include the raw user query in retrieval alongside any other hints
+    queries = list(dict.fromkeys([query] + (cbs_queries or [])))
     try:
         return await _run_deep(query, queries, political_context, llm, callbacks)
     except Exception as exc:
         print(f"DEBUG_LOG: deep CBS agent failed, falling back to fast: {exc}")
-        return await _run_fast(query, queries, political_context, llm, on_status)
+        fast_queries = cbs_queries if cbs_queries else [query]
+        return await _run_fast(query, fast_queries, political_context, llm, on_status)
