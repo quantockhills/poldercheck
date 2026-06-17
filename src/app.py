@@ -215,10 +215,12 @@ with st.sidebar:
         help="Explains Dutch terms, abbreviations, and policy names inline.",
     )
 
-query = st.text_input(
-    "Ask a question about Dutch politics or policy",
-    placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
-)
+with st.form("search_form", clear_on_submit=False):
+    query = st.text_input(
+        "Ask a question about Dutch politics or policy",
+        placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
+    )
+    submitted = st.form_submit_button("Search", type="primary", use_container_width=True)
 
 # ── session state ────────────────────────────────────────────────────────────
 for _k, _v in [("app_state", "idle"), ("search_out", {}), ("status_msgs", []),
@@ -250,7 +252,7 @@ def _search_thread(query, language, mode, pedagogical, stop_event, msgs, out):
 
 
 # ── start a new search ───────────────────────────────────────────────────────
-if query and st.session_state.app_state == "idle":
+if submitted and query and st.session_state.app_state == "idle":
     stop_event = threading.Event()
     msgs: list = []
     out: dict = {"done": False}
