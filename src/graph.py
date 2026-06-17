@@ -194,6 +194,7 @@ async def run_query(
     language: str = "nl",
     mode: str = "deep",
     pedagogical: bool = False,
+    extra_callbacks: list | None = None,
 ) -> dict:
     graph = build_graph()
     initial_state = PolderState(
@@ -209,7 +210,7 @@ async def run_query(
     )
     result = await graph.ainvoke(
         initial_state,
-        config={"callbacks": _langfuse_callbacks()},
+        config={"callbacks": _langfuse_callbacks() + (extra_callbacks or [])},
     )
     return result
 

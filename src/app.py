@@ -1,9 +1,62 @@
 import asyncio
+import json
 import re
 
 import streamlit as st
+from langchain_core.callbacks import BaseCallbackHandler
 
 from src.graph import run_query
+
+
+class _StatusCallback(BaseCallbackHandler):
+    """Pipes LangGraph node and tool events to a Streamlit st.status container."""
+
+    _NODE_LABELS = {
+        "query_planner": "Generating search terms...",
+        "political":     "Searching Tweede Kamer debates...",
+        "data":          "Fetching CBS data...",
+        "synthesis":     "Synthesizing...",
+    }
+    _TOOL_LABELS = {
+        "search_tk":                  "Searching debates",
+        "search_by_category":         "Searching debates",
+        "analyze_document_relevance": "Checking document",
+        "get_document_content":       "Loading document",
+        "get_observations":           "Fetching CBS observations",
+    }
+
+    def __init__(self, write_fn):
+        super().__init__()
+        self._write = write_fn
+
+    def on_chain_start(self, serialized, inputs, **kwargs):
+        name = (serialized or {}).get("name", "")
+        if name in self._NODE_LABELS:
+            self._write(self._NODE_LABELS[name])
+
+    def on_chain_end(self, outputs, **kwargs):
+        # Surface CBS search terms after query_planner finishes
+        if isinstance(outputs, dict) and "cbs_queries" in outputs:
+            queries = outputs["cbs_queries"]
+            if queries:
+                self._write(f"CBS search terms: *{', '.join(queries)}*")
+
+    def on_tool_start(self, serialized, input_str, **kwargs):
+        name = (serialized or {}).get("name", "")
+        if name not in self._TOOL_LABELS:
+            return
+        try:
+            args = json.loads(input_str) if isinstance(input_str, str) else (input_str or {})
+        except Exception:
+            args = {}
+        if name in ("search_tk", "search_by_category"):
+            q = args.get("query", "")
+            if q:
+                self._write(f"Searching for: *{q[:80]}*")
+        elif name == "analyze_document_relevance":
+            self._write(f"Checking relevance: {args.get('docId', '?')}")
+        elif name == "get_document_content":
+            self._write(f"Loading: {args.get('docId', '?')}")
 
 PARTY_COLORS = {
     "VVD": "#FF6600",
@@ -103,8 +156,10 @@ query = st.text_input(
 )
 
 if query:
-    with st.spinner("Consulting parliamentary records and CBS data..."):
-        result = asyncio.run(run_query(query, language=language, mode=mode, pedagogical=pedagogical))
+    with st.status("Consulting parliamentary records and CBS data...", expanded=True) as status:
+        cb = _StatusCallback(status.write)
+        result = asyncio.run(run_query(query, language=language, mode=mode, pedagogical=pedagogical, extra_callbacks=[cb]))
+        status.update(label="Done", state="complete", expanded=False)
 
     main_text, sources_text = _split_sources(result["final_response"])
 
