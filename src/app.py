@@ -111,11 +111,31 @@ def _party_color(party_name: str) -> str:
 
 
 def _split_sources(text: str) -> tuple[str, str]:
-    """Split response into body and Sources section."""
-    match = re.search(r"\n\n(Sources[^:]*:.*)", text, re.DOTALL | re.IGNORECASE)
+    """Split response into body and Sources section (handles ## Sources or Sources:)."""
+    match = re.search(r"\n\n((?:##\s*)?Sources[^:]*:?.*)", text, re.DOTALL | re.IGNORECASE)
     if match:
         return text[: match.start()].strip(), match.group(1).strip()
     return text, ""
+
+
+def _translate(text: str, target_lang: str) -> str:
+    """Translate a final_response to the target language, preserving footnotes."""
+    from openai import OpenAI
+    from src.agents.config import AGENT_CONFIGS
+    cfg = AGENT_CONFIGS["synthesis"]
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
+    lang_name = "English" if target_lang == "en" else "Dutch"
+    response = client.chat.completions.create(
+        model=cfg["model"],
+        messages=[{"role": "user", "content": (
+            f"Translate the following to {lang_name}. "
+            "Preserve all superscript citations (^1, ^2, etc.), source IDs, document identifiers, "
+            "and the ## Sources section structure exactly — only translate the prose.\n\n" + text
+        )}],
+        max_tokens=1200,
+        extra_body={"thinking": {"type": "disabled"}},
+    )
+    return response.choices[0].message.content
 
 
 st.set_page_config(page_title="Poldercheck", page_icon="🌊", layout="wide")
@@ -177,7 +197,8 @@ query = st.text_input(
 
 # ── session state ────────────────────────────────────────────────────────────
 for _k, _v in [("app_state", "idle"), ("search_out", {}), ("status_msgs", []),
-               ("stop_event", None), ("search_thread", None)]:
+               ("stop_event", None), ("search_thread", None),
+               ("translations", {}), ("search_language", None)]:
     st.session_state.setdefault(_k, _v)
 
 
@@ -210,6 +231,8 @@ if query and st.session_state.app_state == "idle":
     st.session_state.stop_event = stop_event
     st.session_state.status_msgs = msgs
     st.session_state.search_out = out
+    st.session_state.translations = {}
+    st.session_state.search_language = language
     st.session_state.search_thread = _search_thread(
         query, language, mode, pedagogical, stop_event, msgs, out
     )
@@ -248,7 +271,20 @@ if st.session_state.app_state == "done":
         st.stop()
 
     result = out["result"]
-    main_text, sources_text = _split_sources(result["final_response"])
+
+    # Seed the translation cache with the language the search was run in
+    search_lang = st.session_state.search_language or language
+    if search_lang not in st.session_state.translations:
+        st.session_state.translations[search_lang] = result["final_response"]
+
+    # Translate on toggle if we don't have this language cached yet
+    if language not in st.session_state.translations:
+        with st.spinner(f"Translating to {'English' if language == 'en' else 'Dutch'}..."):
+            st.session_state.translations[language] = _translate(
+                st.session_state.translations[search_lang], language
+            )
+
+    main_text, sources_text = _split_sources(st.session_state.translations[language])
 
     with st.container(border=True):
         st.markdown(main_text)

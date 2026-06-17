@@ -136,9 +136,9 @@ Write a single response that:
 - Explicitly flags where the data supports or contradicts what politicians claimed
 - Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
 - Groups parties by position rather than listing each one individually
-- Preserves every inline citation exactly as it appears in the source responses — every number and every political claim must have its [citation] immediately after it in the same sentence; never strip or consolidate inline citations
-- Is at most 300 words
-- Ends with "Sources: [list all cited sources]"
+- Numbers every citation as a superscript in order of first appearance: ^1, ^2, ^3, etc. — place each immediately after the claim it supports. If the same source appears again, reuse the same number. Never drop a citation.
+- Is at most 300 words of prose (excluding the sources section)
+- Ends with a blank line then "## Sources" followed by a numbered list: "^1 Full source name, Date [ID]"
 
 Only note absence of information if a response contains truly nothing useful — not if it found live parliamentary documents but lacked static corpus passages. Never open with a meta-comment about what the experts did or did not find.
 {ped_instruction}
