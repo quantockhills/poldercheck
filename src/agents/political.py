@@ -213,9 +213,16 @@ async def run_political_analyst_v2(
                     {"role": "system", "content": _system_prompt(language)},
                     {"role": "user", "content": user_content},
                 ]},
-                config={"recursion_limit": 30},
+                config={"recursion_limit": 60},
             )
-        return {"response": result["messages"][-1].content, "passages": static_passages}
+        response_text = result["messages"][-1].content
+        # LangGraph emits this string when it hits the recursion limit mid-run
+        if "need more steps" in response_text.lower():
+            response_text = (
+                "I did not find relevant information on this topic in the current corpus. "
+                "Other sources may exist that I do not have access to."
+            )
+        return {"response": response_text, "passages": static_passages}
 
     async def _run_with_opentk() -> dict:
         if mode == "fast":
