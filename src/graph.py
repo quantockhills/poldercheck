@@ -146,7 +146,7 @@ Data analyst response:
 {state['data_response']}
 
 Write a single response that:
-- Directly answers the question as asked: for comparison/historical questions lead with the comparison (e.g. "tone shifted from X to Y"); for policy questions lead with what parties have said; for data questions lead with the numbers. Never open with a list of parties and their positions when the question was not "what do parties say?" — never open with an independent editorial verdict of your own
+- Opens by directly answering what was asked: a comparison question gets the comparison first, a data question gets the numbers first, a policy question gets what parties said first. Never open with your own editorial verdict
 - Then shows what CBS data says about the same phenomenon
 - Explicitly flags where the data supports or contradicts what politicians claimed
 - Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
