@@ -16,6 +16,7 @@ openai
 streamlit
 pypdf
 requests
+httpx
 python-dotenv
 pytest
 ragas

@@ -5,6 +5,7 @@ Drop-in: embed_texts(list[str]) -> list[list[float]], embed_query(str) -> list[f
 
 Requires OPENROUTER_API_KEY env var (falls back to LLM_API_KEY).
 """
+
 import os
 import time
 
@@ -21,9 +22,7 @@ def _get_client() -> OpenAI:
     if _client is None:
         api_key = os.environ.get("OPENROUTER_API_KEY") or os.environ.get("LLM_API_KEY", "")
         if not api_key:
-            raise EnvironmentError(
-                "Set OPENROUTER_API_KEY in .env to use embeddings (or LLM_API_KEY pointing to OpenRouter)."
-            )
+            raise OSError("Set OPENROUTER_API_KEY in .env to use embeddings (or LLM_API_KEY pointing to OpenRouter).")
         _client = OpenAI(base_url=_OPENROUTER_BASE, api_key=api_key)
     return _client
 
@@ -31,13 +30,16 @@ def _get_client() -> OpenAI:
 def embed_texts(texts: list[str], batch_size: int = 128, show_progress: bool = False) -> list[list[float]]:
     """Embed a list of texts via OpenRouter; returns one vector per input, in order."""
     import math
+
     client = _get_client()
     all_embeddings: list[list[float]] = []
     batches = range(0, len(texts), batch_size)
     if show_progress:
         from tqdm import tqdm
-        batches = tqdm(batches, total=math.ceil(len(texts) / batch_size),
-                       desc=f"Embedding {len(texts)} chunks", unit="batch")
+
+        batches = tqdm(
+            batches, total=math.ceil(len(texts) / batch_size), desc=f"Embedding {len(texts)} chunks", unit="batch"
+        )
     for i in batches:
         batch = texts[i : i + batch_size]
         response = client.embeddings.create(model=EMBED_MODEL_ID, input=batch)

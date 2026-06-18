@@ -1,15 +1,16 @@
 """LangGraph graph wiring the political analyst, data analyst, and synthesis."""
+
 import asyncio
 import os
 import time
 from typing import TypedDict
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
 
 from src.agents.config import AGENT_CONFIGS
+from src.agents.data import CBS_NOT_FOUND, run_data_analyst
 from src.agents.political import run_political_analyst_v2
-from src.agents.data import run_data_analyst, CBS_NOT_FOUND
 
 DATA_NODE_TIMEOUT_FAST_S = 90
 DATA_NODE_TIMEOUT_DEEP_S = 150
@@ -17,9 +18,13 @@ DATA_NODE_TIMEOUT_DEEP_S = 150
 
 class PolderState(TypedDict):
     query: str
-    language: str      # "nl" | "en"
-    mode: str          # "fast" | "deep"
+    language: str  # "nl" | "en"
+    mode: str  # "fast" | "deep"
     pedagogical: bool  # if True, synthesis explains Dutch terms inline
+    include_manifestos: bool  # if False, static search uses only CPB/PBL (no party PDFs)
+    include_tk: bool  # if False, skips OpenTK live parliamentary search
+    include_cbs: bool  # if False, skips CBS data node entirely
+    num_datasets: int  # how many CBS datasets to query
     cbs_queries: list  # LLM-generated Dutch CBS search term variants
     political_response: str
     political_passages: list
@@ -37,13 +42,18 @@ async def query_planner_node(state: PolderState) -> dict:
     try:
         response = client.chat.completions.create(
             model=cfg["model"],
-            messages=[{"role": "user", "content": (
-                f"Extract the statistical topic from this query as 5-7 Dutch CBS StatLine search terms. "
-                f"Ignore political framing. Focus on measurable phenomena — generate semantically diverse "
-                f"variants that would match different CBS dataset titles, e.g. for housing affordability: "
-                f"huurprijzen, koopwoningen, woningvoorraad, sociale huur, woz waarde, huurmarkt, woningmarkt. "
-                f"Return only the Dutch terms, one per line, nothing else.\n\nQuery: {state['query']}"
-            )}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": (
+                        f"Extract the statistical topic from this query as 5-7 Dutch CBS StatLine search terms. "
+                        f"Ignore political framing. Focus on measurable phenomena — generate semantically diverse "
+                        f"variants that would match different CBS dataset titles, e.g. for housing affordability: "
+                        f"huurprijzen, koopwoningen, woningvoorraad, sociale huur, woz waarde, huurmarkt, woningmarkt. "
+                        f"Return only the Dutch terms, one per line, nothing else.\n\nQuery: {state['query']}"
+                    ),
+                }
+            ],
             max_tokens=60,
             extra_body={"thinking": {"type": "disabled"}},
         )
@@ -64,6 +74,8 @@ async def political_node(state: PolderState) -> dict:
             query=state["query"],
             language=state.get("language", "nl"),
             mode=state.get("mode", "deep"),
+            include_manifestos=state.get("include_manifestos", True),
+            include_tk=state.get("include_tk", True),
         )
     except Exception as exc:
         print(f"DEBUG_LOG: political node failed: {type(exc).__name__}: {exc}")
@@ -82,6 +94,9 @@ async def data_node(state: PolderState, config=None) -> dict:
     can extract the outer callbacks (for Stop + status) and pass them into the
     deep-mode React agent.
     """
+    if not state.get("include_cbs", True):
+        return {"data_response": ""}
+
     t0 = time.monotonic()
     political = state.get("political_response", "")
     extra = [political] if political and len(political) > 50 else []
@@ -101,12 +116,13 @@ async def data_node(state: PolderState, config=None) -> dict:
                 cbs_queries=state.get("cbs_queries", []) + extra,
                 political_context=political if political else None,
                 mode=mode,
+                num_datasets=state.get("num_datasets", 3),
                 on_status=on_status,
                 callbacks=outer_callbacks,
             ),
             timeout=timeout,
         )
-    except (asyncio.TimeoutError, Exception) as exc:
+    except (TimeoutError, Exception) as exc:
         print(f"DEBUG_LOG: data node failed/timed out: {type(exc).__name__}: {exc}")
         response = CBS_NOT_FOUND
     print(f"DEBUG_LOG: data node took {time.monotonic() - t0:.1f}s")
@@ -125,8 +141,8 @@ def synthesis_node(state: PolderState) -> dict:
     lang_instruction = (
         "Respond entirely in English. Translate Dutch terms and source titles; "
         "preserve Dutch quotes with English translation first: 'translation' [origineel]."
-        if lang == "en" else
-        "Respond entirely in Dutch."
+        if lang == "en"
+        else "Respond entirely in Dutch."
     )
 
     ped_instruction = (
@@ -135,30 +151,50 @@ def synthesis_node(state: PolderState) -> dict:
         "e.g. 'uitpondgolf (wave of landlords selling off rental properties)', "
         "'woonquote (share of income spent on housing)', 'CBS (Statistics Netherlands)', "
         "'Tweede Kamer (lower house of parliament)'. Keep each explanation to 5-10 words."
-        if pedagogical else ""
+        if pedagogical
+        else ""
     )
 
-    prompt = f"""You are synthesising two expert responses into a single clear answer.
+    has_political = bool(state.get("political_response", "").strip())
+    has_data = bool(state.get("data_response", "").strip())
 
-Query: {state['query']}
+    # Build inputs block — only include sections that have content
+    inputs_block = f"Query: {state['query']}\n"
+    if has_political:
+        inputs_block += f"\nPolitical analyst response:\n{state['political_response']}\n"
+    if has_data:
+        inputs_block += f"\nData analyst response:\n{state['data_response']}\n"
 
-Political analyst response:
-{state['political_response']}
+    # Build the synthesis instruction based on which sources are present
+    if has_political and has_data:
+        synthesis_bullets = (
+            "- Opens by directly answering what was asked: a comparison question gets the comparison first, "
+            "a data question gets the numbers first, a policy question gets what parties said first. Never open with your own editorial verdict\n"
+            "- Then shows what CBS data says about the same phenomenon\n"
+            "- Explicitly flags where the data supports or contradicts what politicians claimed\n"
+        )
+    elif has_political:
+        synthesis_bullets = (
+            "- Opens by directly answering what was asked based on the political findings. Never open with your own editorial verdict\n"
+            "- Draws on both parliamentary debates and manifesto/policy report passages where available\n"
+        )
+    else:  # data only
+        synthesis_bullets = (
+            "- Opens by directly answering what was asked using the CBS data. Lead with the numbers\n"
+            "- Explains what the statistics show and what trends they reveal\n"
+        )
 
-Data analyst response:
-{state['data_response']}
+    prompt = f"""You are synthesising expert research into a single clear answer.
 
+{inputs_block}
 Write a single response that:
-- Opens by directly answering what was asked: a comparison question gets the comparison first, a data question gets the numbers first, a policy question gets what parties said first. Never open with your own editorial verdict
-- Then shows what CBS data says about the same phenomenon
-- Explicitly flags where the data supports or contradicts what politicians claimed
-- Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
+{synthesis_bullets}- Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
 - Groups parties by position rather than listing each one individually
 - Numbers every citation as a superscript in order of first appearance: ^1, ^2, ^3, etc. — place each immediately after the claim it supports. If the same source appears again, reuse the same number. Never drop a citation.
 - Is at most 300 words of prose (excluding the sources section)
 - Ends with a blank line then "## Sources" followed by a numbered list: "^1 Full source name, Date [ID]"
 
-Only note absence of information if a response contains truly nothing useful — not if it found live parliamentary documents but lacked static corpus passages. Never open with a meta-comment about what the experts did or did not find.
+Only note absence of information if a response contains truly nothing useful. Never open with a meta-comment about what the experts did or did not find.
 {ped_instruction}
 {lang_instruction}"""
 
@@ -173,6 +209,13 @@ Only note absence of information if a response contains truly nothing useful —
     return {"final_response": response.choices[0].message.content}
 
 
+def _route_political(state: PolderState) -> str:
+    """Skip political node entirely when both manifesto and TK toggles are off."""
+    if state.get("include_manifestos", True) or state.get("include_tk", True):
+        return "political"
+    return "data"
+
+
 def build_graph():
     graph = StateGraph(PolderState)
 
@@ -181,9 +224,8 @@ def build_graph():
     graph.add_node("data", data_node)
     graph.add_node("synthesis", synthesis_node)
 
-    # Sequential: planner → political → data (uses political context) → synthesis
     graph.add_edge(START, "query_planner")
-    graph.add_edge("query_planner", "political")
+    graph.add_conditional_edges("query_planner", _route_political, {"political": "political", "data": "data"})
     graph.add_edge("political", "data")
     graph.add_edge("data", "synthesis")
     graph.add_edge("synthesis", END)
@@ -212,6 +254,10 @@ async def run_query(
     language: str = "nl",
     mode: str = "deep",
     pedagogical: bool = False,
+    include_manifestos: bool = True,
+    include_tk: bool = True,
+    include_cbs: bool = True,
+    num_datasets: int = 3,
     extra_callbacks: list | None = None,
     on_status=None,
 ) -> dict:
@@ -221,6 +267,10 @@ async def run_query(
         language=language,
         mode=mode,
         pedagogical=pedagogical,
+        include_manifestos=include_manifestos,
+        include_tk=include_tk,
+        include_cbs=include_cbs,
+        num_datasets=num_datasets,
         cbs_queries=[],
         political_response="",
         political_passages=[],
@@ -243,7 +293,7 @@ async def run_query(
 if __name__ == "__main__":
     import asyncio
 
-    result = asyncio.run(run_query(
-        "What has parliament debated about housing affordability and what does CBS data show?"
-    ))
+    result = asyncio.run(
+        run_query("What has parliament debated about housing affordability and what does CBS data show?")
+    )
     print(result["final_response"])

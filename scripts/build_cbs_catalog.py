@@ -8,6 +8,7 @@ data/catalog/cbs_catalog.jsonl is committed to the repo and auto-indexed into
 ChromaDB on first startup. Run this script only to refresh (e.g. quarterly,
 or after elections add new datasets).
 """
+
 import json
 import re
 from pathlib import Path
@@ -26,7 +27,7 @@ PAGE_SIZE = 1000
 
 def _extract_period(description: str) -> str:
     """Extract 'Beschikbaar vanaf: YYYY' from Dutch CBS description text."""
-    m = re.search(r'[Bb]eschikbaar vanaf[:\s]+(\d{4})', description or "")
+    m = re.search(r"[Bb]eschikbaar vanaf[:\s]+(\d{4})", description or "")
     return m.group(1) if m else ""
 
 
@@ -40,10 +41,7 @@ def _odata_url(distributions: list) -> str:
 def fetch_full_catalog() -> list[dict]:
     """Fetch all active datasets from CBS OData v4."""
     datasets = []
-    url = (
-        f"{CBS_V4_DATASETS_URL}"
-        f"?$top={PAGE_SIZE}&$filter=Status ne 'Gediscontinueerd'"
-    )
+    url = f"{CBS_V4_DATASETS_URL}?$top={PAGE_SIZE}&$filter=Status ne 'Gediscontinueerd'"
     while url:
         resp = requests.get(url, timeout=30)
         resp.raise_for_status()
@@ -86,22 +84,22 @@ def build_cbs_catalog():
         client.delete_collection(CATALOG_COLLECTION)
     except Exception:
         pass
-    collection = client.create_collection(
-        CATALOG_COLLECTION, metadata={"hnsw:space": "cosine"}
-    )
+    collection = client.create_collection(CATALOG_COLLECTION, metadata={"hnsw:space": "cosine"})
 
     texts, metadatas, ids = [], [], []
     for entry in entries:
         summary = entry["summary"][:200]
         embed_text = f"{entry['title']}. {summary}" if summary else entry["title"]
         texts.append(embed_text)
-        metadatas.append({
-            "identifier": entry["identifier"],
-            "title": entry["title"],
-            "period": entry["modified"],  # use modified date for recency filter
-            "language": entry["language"],
-            "api_url": entry["api_url"],
-        })
+        metadatas.append(
+            {
+                "identifier": entry["identifier"],
+                "title": entry["title"],
+                "period": entry["modified"],  # use modified date for recency filter
+                "language": entry["language"],
+                "api_url": entry["api_url"],
+            }
+        )
         ids.append(entry["identifier"])
 
     print(f"Embedding {len(texts)} entries...")
@@ -109,15 +107,16 @@ def build_cbs_catalog():
 
     for i in range(0, len(texts), 1000):
         collection.add(
-            documents=texts[i:i + 1000],
-            embeddings=embeddings[i:i + 1000],
-            metadatas=metadatas[i:i + 1000],
-            ids=ids[i:i + 1000],
+            documents=texts[i : i + 1000],
+            embeddings=embeddings[i : i + 1000],
+            metadatas=metadatas[i : i + 1000],
+            ids=ids[i : i + 1000],
         )
     print(f"Done. {len(texts)} CBS datasets indexed in '{CATALOG_COLLECTION}'.")
 
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
+
     load_dotenv()
     build_cbs_catalog()

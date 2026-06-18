@@ -7,6 +7,7 @@ Resumable: uses get_or_create_collection and skips already-indexed IDs.
 Low memory: embeds and stores in batches of EMBED_BATCH, never holding
 all embeddings in RAM at once.
 """
+
 from pathlib import Path
 
 import chromadb
@@ -46,9 +47,7 @@ PDF_SOURCES = {
 def build_store():
     client = chromadb.PersistentClient(path=CHROMA_PATH)
     # get_or_create preserves any already-indexed chunks on restart
-    collection = client.get_or_create_collection(
-        COLLECTION_NAME, metadata={"hnsw:space": "cosine"}
-    )
+    collection = client.get_or_create_collection(COLLECTION_NAME, metadata={"hnsw:space": "cosine"})
 
     # Load existing IDs so we can skip them
     existing_ids = set(collection.get(include=[])["ids"])
@@ -65,22 +64,25 @@ def build_store():
         print(f"Loading {len(df)} manifesto quasi-sentences...")
         for i, row in df.iterrows():
             all_texts.append(row["text"])
-            all_metadata.append({
-                "source": row["source"],
-                "type": "manifesto",
-                "party_name": row["party_name"],
-                "election": str(row["election"]),
-                "cmp_code": str(row["cmp_code"]),
-                "year": str(row["election"])[:4],
-                "language": "nl",
-            })
+            all_metadata.append(
+                {
+                    "source": row["source"],
+                    "type": "manifesto",
+                    "party_name": row["party_name"],
+                    "election": str(row["election"]),
+                    "cmp_code": str(row["cmp_code"]),
+                    "year": str(row["election"])[:4],
+                    "language": "nl",
+                }
+            )
             all_ids.append(f"manifesto_{row['party_id']}_{row['election']}_{i}")
     else:
         print("No manifesto CSV found : run fetch_manifestos.py first")
 
     # Part B: CPB/PBL PDFs
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=400, chunk_overlap=60,
+        chunk_size=400,
+        chunk_overlap=60,
         separators=["\n\n", "\n", ". ", " "],
     )
     for pdf_path, meta in PDF_SOURCES.items():
@@ -115,15 +117,17 @@ def build_store():
                 continue
             for j, doc in enumerate(docs):
                 all_texts.append(doc.page_content)
-                all_metadata.append({
-                    "source": f"{party} Verkiezingsprogramma {year}",
-                    "type": "manifesto_pdf",
-                    "party_name": party,
-                    "election": election_code,
-                    "year": year,
-                    "language": "nl",
-                    "chunk_index": j,
-                })
+                all_metadata.append(
+                    {
+                        "source": f"{party} Verkiezingsprogramma {year}",
+                        "type": "manifesto_pdf",
+                        "party_name": party,
+                        "election": election_code,
+                        "year": year,
+                        "language": "nl",
+                        "chunk_index": j,
+                    }
+                )
                 all_ids.append(f"manifesto_pdf_{party}_{year}_{j}")
 
     if not all_texts:
@@ -146,9 +150,9 @@ def build_store():
 
     # Embed + store in small batches immediately — low peak memory, crash-safe
     for i in tqdm(range(0, len(new_texts), EMBED_BATCH), desc="Embedding", unit="batch"):
-        batch_texts = new_texts[i:i + EMBED_BATCH]
-        batch_meta = new_metadata[i:i + EMBED_BATCH]
-        batch_ids = new_ids[i:i + EMBED_BATCH]
+        batch_texts = new_texts[i : i + EMBED_BATCH]
+        batch_meta = new_metadata[i : i + EMBED_BATCH]
+        batch_ids = new_ids[i : i + EMBED_BATCH]
         embeddings = embed_texts(batch_texts, batch_size=EMBED_BATCH)
         collection.add(
             documents=batch_texts,

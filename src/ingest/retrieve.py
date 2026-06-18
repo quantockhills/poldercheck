@@ -1,4 +1,5 @@
 """Semantic search over the static ChromaDB corpus and the CBS catalog."""
+
 import json
 from pathlib import Path
 
@@ -27,8 +28,7 @@ def _build_cbs_collection_from_jsonl(client: chromadb.PersistentClient):
     """Build the CBS catalog ChromaDB collection from the committed JSONL."""
     if not CBS_CATALOG_JSONL.exists():
         raise FileNotFoundError(
-            f"CBS catalog not found at {CBS_CATALOG_JSONL}. "
-            "Run scripts/build_cbs_catalog.py to fetch and refresh it."
+            f"CBS catalog not found at {CBS_CATALOG_JSONL}. Run scripts/build_cbs_catalog.py to fetch and refresh it."
         )
     print("DEBUG_LOG: building CBS catalog index from JSONL (one-time ~5 min via API)...")
     datasets = [json.loads(line) for line in CBS_CATALOG_JSONL.read_text().splitlines() if line.strip()]
@@ -39,23 +39,25 @@ def _build_cbs_collection_from_jsonl(client: chromadb.PersistentClient):
         summary = ds.get("summary", "")[:200]
         embed_text = f"{ds['title']}. {summary}" if summary else ds["title"]
         texts.append(embed_text)
-        metadatas.append({
-            "identifier": ds["identifier"],
-            "title": ds["title"],
-            "period": ds.get("modified", ds.get("period", "")),  # v4 uses modified date
-            "language": ds.get("language", "nl"),
-            "api_url": ds.get("api_url", ""),
-        })
+        metadatas.append(
+            {
+                "identifier": ds["identifier"],
+                "title": ds["title"],
+                "period": ds.get("modified", ds.get("period", "")),  # v4 uses modified date
+                "language": ds.get("language", "nl"),
+                "api_url": ds.get("api_url", ""),
+            }
+        )
         ids.append(ds["identifier"])
 
     print(f"DEBUG_LOG: embedding {len(texts)} datasets via OpenRouter...")
     embeddings = embed_texts(texts, batch_size=128)
     for i in range(0, len(texts), 1000):
         collection.add(
-            documents=texts[i:i + 1000],
-            embeddings=embeddings[i:i + 1000],
-            metadatas=metadatas[i:i + 1000],
-            ids=ids[i:i + 1000],
+            documents=texts[i : i + 1000],
+            embeddings=embeddings[i : i + 1000],
+            metadatas=metadatas[i : i + 1000],
+            ids=ids[i : i + 1000],
         )
     print(f"DEBUG_LOG: CBS catalog indexed: {len(texts)} datasets.")
     return collection
@@ -72,19 +74,33 @@ def _get_cbs_collection():
     return _cbs_collection
 
 
-def retrieve_static(query: str, n_results: int = 10) -> list[dict]:
+def retrieve_static(
+    query: str,
+    n_results: int = 10,
+    include_manifestos: bool = True,
+) -> list[dict]:
     """
     Retrieve n_results most relevant chunks from the static corpus.
     Returns list of dicts with 'text', 'metadata' and 'relevance_score' keys.
-    Excludes raw Manifesto Project CSV quasi-sentences (type='manifesto') — only
-    PDF-sourced chunks (manifestos, CPB, PBL) are returned.
+    Always excludes raw Manifesto Project CSV quasi-sentences (type='manifesto').
+    When include_manifestos=False, also excludes PDF party manifesto chunks
+    (type='manifesto_pdf'), returning only CPB and PBL report chunks.
+    Short junk chunks (< 30 chars) from PDF extraction artifacts are filtered out.
     """
     collection = _get_collection()
     embedding = [embed_query(query)]
+
+    if include_manifestos:
+        where = {"type": {"$ne": "manifesto"}}
+    else:
+        where = {"type": {"$nin": ["manifesto", "manifesto_pdf"]}}
+
+    # Fetch extra to compensate for junk chunks filtered below
+    fetch_n = n_results + 5
     results = collection.query(
         query_embeddings=embedding,
-        n_results=n_results,
-        where={"type": {"$ne": "manifesto"}},
+        n_results=fetch_n,
+        where=where,
         include=["documents", "metadatas", "distances"],
     )
     passages = []
@@ -93,12 +109,16 @@ def retrieve_static(query: str, n_results: int = 10) -> list[dict]:
         results["metadatas"][0],
         results["distances"][0],
     ):
-        passages.append({
-            "text": doc,
-            "metadata": meta,
-            "relevance_score": round(1 - dist, 3),  # cosine distance to similarity
-        })
-    return passages
+        if len(doc.strip()) < 30:
+            continue
+        passages.append(
+            {
+                "text": doc,
+                "metadata": meta,
+                "relevance_score": round(1 - dist, 3),
+            }
+        )
+    return passages[:n_results]
 
 
 def format_for_prompt(passages: list[dict]) -> str:
@@ -107,16 +127,15 @@ def format_for_prompt(passages: list[dict]) -> str:
     for i, p in enumerate(passages):
         meta = p["metadata"]
         citation = f"[{meta.get('source', '?')}, {meta.get('year', '?')}]"
-        parts.append(
-            f"Passage {i+1} {citation}:\n{p['text']}"
-        )
+        parts.append(f"Passage {i + 1} {citation}:\n{p['text']}")
     return "\n\n---\n\n".join(parts)
 
 
 def _end_year(period: str) -> int:
     """Extract the last 4-digit year from a CBS period string."""
     import re
-    years = re.findall(r'\b(19|20)\d{2}\b', period)
+
+    years = re.findall(r"\b(19|20)\d{2}\b", period)
     return int(years[-1]) if years else 0
 
 

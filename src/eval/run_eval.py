@@ -11,6 +11,7 @@ Writes eval_results.json and exits non-zero if thresholds are not met.
 Requires: built chroma_db corpus + OPENROUTER_API_KEY. Costs LLM-judge API
 calls - run on main / pre-release, not on every push.
 """
+
 import asyncio
 import json
 import os
@@ -42,13 +43,15 @@ async def collect_responses(cases: list[dict]) -> list[dict]:
     for case in cases:
         print(f"Running: {case['query']}")
         result = await run_query(case["query"])
-        rows.append({
-            "user_input": case["query"],
-            "response": result["final_response"],
-            "retrieved_contexts": [p["text"] for p in result.get("political_passages", [])],
-            "expected_behaviour": case["expected_behaviour"],
-            "contract_violations": check_response_contract(result["final_response"]),
-        })
+        rows.append(
+            {
+                "user_input": case["query"],
+                "response": result["final_response"],
+                "retrieved_contexts": [p["text"] for p in result.get("political_passages", [])],
+                "expected_behaviour": case["expected_behaviour"],
+                "contract_violations": check_response_contract(result["final_response"]),
+            }
+        )
     return rows
 
 
@@ -60,20 +63,24 @@ def score_with_ragas(rows: list[dict]) -> dict:
     from ragas.llms import LangchainLLMWrapper
     from ragas.metrics import answer_relevancy, context_precision, faithfulness
 
-    judge = LangchainLLMWrapper(ChatOpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key=os.environ["OPENROUTER_API_KEY"],
-        model="anthropic/claude-sonnet-4-6",
-    ))
+    judge = LangchainLLMWrapper(
+        ChatOpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=os.environ["OPENROUTER_API_KEY"],
+            model="anthropic/claude-sonnet-4-6",
+        )
+    )
 
-    dataset = Dataset.from_list([
-        {
-            "question": r["user_input"],
-            "answer": r["response"],
-            "contexts": r["retrieved_contexts"],
-        }
-        for r in rows
-    ])
+    dataset = Dataset.from_list(
+        [
+            {
+                "question": r["user_input"],
+                "answer": r["response"],
+                "contexts": r["retrieved_contexts"],
+            }
+            for r in rows
+        ]
+    )
 
     result = evaluate(
         dataset,
@@ -95,8 +102,7 @@ def main() -> int:
     rows = asyncio.run(collect_responses(cases))
 
     contract_failures = [
-        {"query": r["user_input"], "violations": r["contract_violations"]}
-        for r in rows if r["contract_violations"]
+        {"query": r["user_input"], "violations": r["contract_violations"]} for r in rows if r["contract_violations"]
     ]
 
     scores = score_with_ragas(rows)
@@ -121,9 +127,7 @@ def main() -> int:
         for failure in contract_failures:
             print(f"    {failure['query']}: {failure['violations']}")
 
-    failed = contract_failures or any(
-        scores.get(m, 1.0) < t for m, t in THRESHOLDS.items()
-    )
+    failed = contract_failures or any(scores.get(m, 1.0) < t for m, t in THRESHOLDS.items())
     return 1 if failed else 0
 
 

@@ -4,7 +4,6 @@ These don't judge response *quality* (that's RAGAS's job); they enforce the
 non-negotiables from the system prompts: every response either cites inline
 or explicitly says nothing was found, and stays within the word budget.
 """
-import re
 
 from src.eval.contract import check_response_contract
 

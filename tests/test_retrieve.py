@@ -1,6 +1,6 @@
 import os
 
-from src.ingest.retrieve import retrieve_static, format_for_prompt
+from src.ingest.retrieve import format_for_prompt, retrieve_static
 
 
 def test_retrieve_returns_list():

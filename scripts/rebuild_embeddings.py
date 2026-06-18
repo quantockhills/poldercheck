@@ -5,6 +5,7 @@ Requires OPENROUTER_API_KEY in .env.
 
     python -m scripts.rebuild_embeddings
 """
+
 import chromadb
 
 CHROMA_PATH = "./chroma_db"
@@ -23,6 +24,7 @@ def _drop_collections():
 
 if __name__ == "__main__":
     from dotenv import load_dotenv
+
     load_dotenv()
 
     print("=== Step 1: drop stale collections ===")
@@ -30,11 +32,14 @@ if __name__ == "__main__":
 
     print("\n=== Step 2: rebuild poldercheck_static ===")
     from src.ingest.chunk import build_store
+
     build_store()
 
     print("\n=== Step 3: rebuild cbs_catalog from JSONL ===")
     import chromadb as _chroma
+
     from src.ingest.retrieve import _build_cbs_collection_from_jsonl
+
     client = _chroma.PersistentClient(path=CHROMA_PATH)
     _build_cbs_collection_from_jsonl(client)
 

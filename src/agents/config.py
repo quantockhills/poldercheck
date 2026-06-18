@@ -37,6 +37,7 @@ load_dotenv()
 
 BASE_URL = os.environ.get("LLM_BASE_URL", "")
 
+
 def _resolve_api_key() -> str:
     for var in ("LLM_API_KEY", "OPENROUTER_API_KEY", "ANTHROPIC_AUTH_TOKEN"):
         val = os.environ.get(var, "")
@@ -44,19 +45,17 @@ def _resolve_api_key() -> str:
             return val
     return ""
 
+
 API_KEY = _resolve_api_key()
 
 # ---------------------------------------------------------------------------
 # Per-agent configs
 # ---------------------------------------------------------------------------
 
+
 def _agent_cfg(name: str, max_tokens: int) -> dict:
     prefix = f"POLDERCHECK_{name.upper()}"
-    model = (
-        os.environ.get(f"{prefix}_MODEL")
-        or os.environ.get("POLDERCHECK_MODEL")
-        or ""
-    )
+    model = os.environ.get(f"{prefix}_MODEL") or os.environ.get("POLDERCHECK_MODEL") or ""
     return {
         "base_url": os.environ.get(f"{prefix}_BASE_URL", BASE_URL),
         "api_key": os.environ.get(f"{prefix}_API_KEY", API_KEY),
@@ -67,7 +66,7 @@ def _agent_cfg(name: str, max_tokens: int) -> dict:
 
 AGENT_CONFIGS = {
     "political_analyst": _agent_cfg("political", 800),
-    "opentk_agent": _agent_cfg("opentk", 800),   # tool-calling loop — use a fast model
+    "opentk_agent": _agent_cfg("opentk", 800),  # tool-calling loop — use a fast model
     "data_analyst": _agent_cfg("data", 600),
     "synthesis": _agent_cfg("synthesis", 2000),
 }

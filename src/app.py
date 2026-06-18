@@ -2,15 +2,18 @@ import asyncio
 import json
 import re
 import threading
+import time
 
 import streamlit as st
 from langchain_core.callbacks import BaseCallbackHandler
 
 from src.graph import run_query
+from src.storage import delete_conversation, load_history, save_conversation
 
 
 class _CancelCallback(BaseCallbackHandler):
     """Raises StopIteration between nodes when the stop event is set."""
+
     def __init__(self, stop_event: threading.Event):
         super().__init__()
         self._stop = stop_event
@@ -25,21 +28,23 @@ class _StatusCallback(BaseCallbackHandler):
 
     _NODE_LABELS = {
         "query_planner": "Generating search terms...",
-        "political":     "Searching Tweede Kamer debates...",
-        "data":          "Fetching CBS data...",
-        "synthesis":     "Synthesizing...",
+        "political": "Searching Tweede Kamer debates...",
+        "data": "Fetching CBS data...",
+        "synthesis": "Synthesizing...",
     }
     _TOOL_LABELS = {
-        "search_tk":                  "Searching debates",
-        "search_by_category":         "Searching debates",
+        "search_tk": "Searching debates",
+        "search_by_category": "Searching debates",
         "analyze_document_relevance": "Checking document",
-        "get_document_content":       "Loading document",
-        "search_cbs_catalog":         "Searching CBS catalog",
-        "query_datasets":             "Querying CBS catalog",
-        "get_dimensions":             "Inspecting CBS dataset",
-        "get_dimension_values":       "Loading dimension values",
-        "get_observations":           "Fetching CBS data",
-        "query_observations":         "Fetching CBS data",
+        "get_document_content": "Loading document",
+        "search_manifesto_corpus": "Searching manifestos & policy reports",
+        "search_cbs_catalog": "Searching CBS catalog",
+        "fetch_cbs_dataset": "Fetching CBS dataset",
+        "query_datasets": "Querying CBS catalog",
+        "get_dimensions": "Inspecting CBS dataset",
+        "get_dimension_values": "Loading dimension values",
+        "get_observations": "Fetching CBS data",
+        "query_observations": "Fetching CBS data",
     }
 
     def __init__(self, write_fn):
@@ -52,7 +57,6 @@ class _StatusCallback(BaseCallbackHandler):
             self._write(self._NODE_LABELS[name])
 
     def on_chain_end(self, outputs, **kwargs):
-        # Surface CBS search terms after query_planner finishes (fast mode only)
         if isinstance(outputs, dict) and outputs.get("cbs_queries"):
             self._write(f"CBS search terms: *{', '.join(outputs['cbs_queries'])}*")
 
@@ -68,6 +72,7 @@ class _StatusCallback(BaseCallbackHandler):
                 args = json.loads(input_str)
             except Exception:
                 import ast
+
                 try:
                     args = ast.literal_eval(input_str)
                 except Exception:
@@ -80,10 +85,17 @@ class _StatusCallback(BaseCallbackHandler):
             self._write(f"Checking relevance: {args.get('docId', '?')}")
         elif name == "get_document_content":
             self._write(f"Loading: {args.get('docId', '?')}")
-        elif name == "search_cbs_catalog":
+        elif name == "search_manifesto_corpus":
+            q = args.get("query", "")
+            if q:
+                self._write(f"Searching manifestos/CPB/PBL: *{q[:60]}*")
+        elif name in ("search_cbs_catalog",):
             q = args.get("query", "")
             if q:
                 self._write(f"Searching CBS catalog: *{q[:60]}*")
+        elif name == "fetch_cbs_dataset":
+            did = args.get("dataset_id", "?")
+            self._write(f"Fetching CBS dataset: *{did}*")
         elif name == "query_datasets":
             q = args.get("query", args.get("term", args.get("q", "")))
             if q:
@@ -98,6 +110,7 @@ class _StatusCallback(BaseCallbackHandler):
         elif name in ("get_observations", "query_observations"):
             did = args.get("dataset", args.get("datasetId", "?"))
             self._write(f"Fetching CBS data: *{did}*")
+
 
 PARTY_COLORS = {
     "VVD": "#FF6600",
@@ -132,7 +145,6 @@ def _party_color(party_name: str) -> str:
 
 
 def _split_sources(text: str) -> tuple[str, str]:
-    """Split response into body and Sources section (handles ## Sources or Sources:)."""
     match = re.search(r"\n\n((?:##\s*)?Sources[^:]*:?.*)", text, re.DOTALL | re.IGNORECASE)
     if match:
         return text[: match.start()].strip(), match.group(1).strip()
@@ -140,41 +152,129 @@ def _split_sources(text: str) -> tuple[str, str]:
 
 
 def _render_footnotes(text: str) -> str:
-    """Convert ^1, ^2, consecutive ^1^2 → blue HTML superscripts."""
     def _to_sup(m):
         nums = re.findall(r"\^(\d+)", m.group(0))
         return f'<sup style="color:#4a90d9;font-weight:600">{",".join(nums)}</sup>'
+
     return re.sub(r"(\^\d+)+", _to_sup, text)
 
 
+def _linkify_ids(text: str) -> str:
+    text = re.sub(
+        r"\b(\d{5,6}[A-Z]{2,3})\b",
+        r'<a href="https://www.cbs.nl/nl-nl/cijfers/detail/\1" target="_blank">\1</a>',
+        text,
+    )
+    text = re.sub(
+        r"\b(\d{4}D\d+)\b",
+        r'<a href="https://www.tweedekamer.nl/kamerstukken/kamerstuk?id=\1" target="_blank">\1</a>',
+        text,
+    )
+    return text
+
+
 def _render_source_nums(text: str) -> str:
-    """Convert leading ^N in source list entries to plain superscripts."""
-    return re.sub(r"\^(\d+)", r"<sup>\1</sup>", text)
+    text = re.sub(r"\^(\d+)", r"<sup>\1</sup>", text)
+    return _linkify_ids(text)
 
 
 def _translate(text: str, target_lang: str) -> str:
-    """Translate a final_response to the target language, preserving footnotes."""
     from openai import OpenAI
+
     from src.agents.config import AGENT_CONFIGS
+
     cfg = AGENT_CONFIGS["synthesis"]
     client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
     lang_name = "English" if target_lang == "en" else "Dutch"
     response = client.chat.completions.create(
         model=cfg["model"],
-        messages=[{"role": "user", "content": (
-            f"Translate the following to {lang_name}. "
-            "Preserve all superscript citations (^1, ^2, etc.), source IDs, document identifiers, "
-            "and the ## Sources section structure exactly — only translate the prose.\n\n" + text
-        )}],
+        messages=[
+            {
+                "role": "user",
+                "content": (
+                    f"Translate the following to {lang_name}. "
+                    "Preserve all superscript citations (^1, ^2, etc.), source IDs, document identifiers, "
+                    "and the ## Sources section structure exactly — only translate the prose.\n\n" + text
+                ),
+            }
+        ],
         max_tokens=1200,
         extra_body={"thinking": {"type": "disabled"}},
     )
     return response.choices[0].message.content
 
 
+def _render_result(result: dict, display_language: str, translations: dict | None = None):
+    """Render a result dict (final_response + passages + sub-responses) into the current container."""
+    final_text = result.get("final_response", "")
+    if not final_text:
+        st.info("No response available.")
+        return
+
+    # Use translations cache if provided (live search), otherwise render as-is
+    if translations is not None:
+        text_to_show = translations.get(display_language, final_text)
+    else:
+        text_to_show = final_text
+
+    main_text, sources_text = _split_sources(text_to_show)
+
+    with st.container(border=True):
+        st.markdown(_render_footnotes(main_text), unsafe_allow_html=True)
+
+    if sources_text:
+        st.markdown(
+            f'<div class="source-footer">{_render_source_nums(sources_text)}</div>',
+            unsafe_allow_html=True,
+        )
+
+    passages = result.get("political_passages", [])
+    pol_raw = result.get("political_response", "")
+    data_raw = result.get("data_response", "")
+
+    tab_labels = (
+        (["Parliamentary passages"] if passages else [])
+        + (["Political analyst"] if pol_raw else [])
+        + (["Data analyst"] if data_raw else [])
+    )
+
+    if tab_labels:
+        tabs = st.tabs(tab_labels)
+        tab_idx = 0
+
+        if passages:
+            with tabs[tab_idx]:
+                for p in passages:
+                    meta = p["metadata"]
+                    party = meta.get("party_name", "")
+                    color = _party_color(party)
+                    score = p.get("relevance_score", "")
+                    score_str = f" &nbsp;·&nbsp; relevance {score}" if score else ""
+                    st.markdown(
+                        f'<div class="party-passage" style="border-left: 4px solid {color};">'
+                        f"<strong>{meta.get('source', '?')} ({meta.get('year', '?')})</strong>"
+                        f'<span style="color:#6b7c8a; font-size:0.8rem;">{score_str}</span><br/><br/>'
+                        f"{p['text']}"
+                        f"</div>",
+                        unsafe_allow_html=True,
+                    )
+            tab_idx += 1
+
+        if pol_raw:
+            with tabs[tab_idx]:
+                st.markdown(pol_raw)
+            tab_idx += 1
+
+        if data_raw:
+            with tabs[tab_idx]:
+                st.markdown(data_raw)
+
+
+# ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Poldercheck", page_icon="🌊", layout="wide")
 
-st.markdown("""
+st.markdown(
+    """
 <style>
     .stApp { background-color: #f8f4f0; }
     .party-passage {
@@ -193,11 +293,14 @@ st.markdown("""
         margin-top: 0.5rem;
     }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
 
 st.markdown("## Poldercheck 🌊")
 st.caption("Connecting Dutch politics and policy to data, in a way anyone can understand.")
 
+# ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.markdown("**About**")
     st.markdown(
@@ -208,11 +311,11 @@ with st.sidebar:
     st.divider()
     st.markdown("**Data sources**")
     st.markdown(
-        "- Tweede Kamer debates (live)\n"
-        "- CBS Statistics Netherlands\n"
-        "- Party manifestos (Manifesto Project)\n"
-        "- CPB Charted Choices\n"
-        "- PBL Climate Analysis"
+        "- [Tweede Kamer debates](https://www.tweedekamer.nl) (live)\n"
+        "- [CBS Statistics Netherlands](https://www.cbs.nl)\n"
+        "- [Party manifestos](https://dnpp.nl) (Manifesto Project)\n"
+        "- [CPB Charted Choices](https://www.cpb.nl)\n"
+        "- [PBL Climate Analysis](https://www.pbl.nl)"
     )
     st.divider()
     st.caption("National-level politics only. Not a stemhulp.")
@@ -223,31 +326,60 @@ with st.sidebar:
         "Pedagogical mode",
         help="Explains Dutch terms, abbreviations, and policy names inline.",
     )
-
-with st.form("search_form", clear_on_submit=False):
-    query = st.text_input(
-        "Ask a question about Dutch politics or policy",
-        placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
+    st.divider()
+    st.markdown("**Sources**")
+    include_manifestos = st.checkbox(
+        "Party manifestos & CPB/PBL",
+        value=True,
+        help="Search party PDFs, CPB Charted Choices, and PBL Climate Analysis.",
     )
-    submitted = st.form_submit_button("Search", type="primary", use_container_width=True)
+    include_tk = st.checkbox("Tweede Kamer debates", value=True, help="Search live parliamentary debates via OpenTK.")
+    include_cbs = st.checkbox(
+        "CBS statistical data", value=True, help="Fetch CBS StatLine data to support or challenge political claims.",
+    )
+    num_datasets = st.number_input(
+        "CBS datasets to query",
+        min_value=1, max_value=10, value=3,
+        help="Number of CBS datasets the agent will search and present.",
+        disabled=not include_cbs,
+    )
 
-# ── session state ────────────────────────────────────────────────────────────
-for _k, _v in [("app_state", "idle"), ("search_out", {}), ("status_msgs", []),
-               ("stop_event", None), ("search_thread", None),
-               ("translations", {}), ("search_language", None)]:
+# ── tabs ──────────────────────────────────────────────────────────────────────
+tab_search, tab_history = st.tabs(["Search", "History"])
+
+# ── session state ─────────────────────────────────────────────────────────────
+for _k, _v in [
+    ("app_state", "idle"),
+    ("search_out", {}),
+    ("status_msgs", []),
+    ("stop_event", None),
+    ("search_thread", None),
+    ("translations", {}),
+    ("search_language", None),
+    ("last_query", ""),
+]:
     st.session_state.setdefault(_k, _v)
 
 
-def _search_thread(query, language, mode, pedagogical, stop_event, msgs, out):
-    """Runs run_query in a daemon thread; stores result in `out`."""
+def _search_thread(
+    query, language, mode, pedagogical, include_manifestos, include_tk, include_cbs, num_datasets, stop_event, msgs, out
+):
     def _go():
         try:
             cb = _StatusCallback(msgs.append)
             out["result"] = asyncio.run(
-                run_query(query, language=language, mode=mode,
-                          pedagogical=pedagogical,
-                          on_status=msgs.append,
-                          extra_callbacks=[_CancelCallback(stop_event), cb])
+                run_query(
+                    query,
+                    language=language,
+                    mode=mode,
+                    pedagogical=pedagogical,
+                    include_manifestos=include_manifestos,
+                    include_tk=include_tk,
+                    include_cbs=include_cbs,
+                    num_datasets=num_datasets,
+                    on_status=msgs.append,
+                    extra_callbacks=[_CancelCallback(stop_event), cb],
+                )
             )
         except StopIteration:
             out["cancelled"] = True
@@ -255,118 +387,129 @@ def _search_thread(query, language, mode, pedagogical, stop_event, msgs, out):
             out["error"] = str(exc)
         finally:
             out["done"] = True
+
     t = threading.Thread(target=_go, daemon=True)
     t.start()
     return t
 
 
-# ── start a new search ───────────────────────────────────────────────────────
-if submitted and query and st.session_state.app_state == "idle":
-    stop_event = threading.Event()
-    msgs: list = []
-    out: dict = {"done": False}
-    st.session_state.stop_event = stop_event
-    st.session_state.status_msgs = msgs
-    st.session_state.search_out = out
-    st.session_state.translations = {}
-    st.session_state.search_language = language
-    st.session_state.search_thread = _search_thread(
-        query, language, mode, pedagogical, stop_event, msgs, out
-    )
-    st.session_state.app_state = "searching"
-    st.rerun()
+# ── search tab ────────────────────────────────────────────────────────────────
+with tab_search:
+    with st.form("search_form", clear_on_submit=False):
+        query = st.text_input(
+            "Ask a question about Dutch politics or policy",
+            placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
+        )
+        submitted = st.form_submit_button("Search", type="primary", use_container_width=True)
 
-# ── poll while searching ─────────────────────────────────────────────────────
-if st.session_state.app_state == "searching":
-    out = st.session_state.search_out
-    msgs = st.session_state.status_msgs
+    # start a new search
+    if submitted and query and st.session_state.app_state == "idle":
+        stop_event = threading.Event()
+        msgs: list = []
+        out: dict = {"done": False}
+        st.session_state.stop_event = stop_event
+        st.session_state.status_msgs = msgs
+        st.session_state.search_out = out
+        st.session_state.translations = {}
+        st.session_state.search_language = language
+        st.session_state.last_query = query
+        st.session_state.pop("current_conv_id", None)
+        st.session_state.search_thread = _search_thread(
+            query, language, mode, pedagogical, include_manifestos, include_tk, include_cbs,
+            num_datasets, stop_event, msgs, out
+        )
+        st.session_state.app_state = "searching"
+        st.rerun()
 
-    with st.status("Consulting parliamentary records and CBS data...", expanded=True) as _status:
-        for m in msgs:
-            _status.write(m)
-        if st.button("Stop", type="secondary"):
-            st.session_state.stop_event.set()
-            st.session_state.app_state = "idle"
-            _status.update(label="Stopped", state="error", expanded=False)
+    # poll while searching
+    if st.session_state.app_state == "searching":
+        out = st.session_state.search_out
+        msgs = st.session_state.status_msgs
+
+        with st.status("Searching...", expanded=True) as _status:
+            for m in msgs:
+                _status.write(m)
+            if st.button("Stop", type="secondary"):
+                st.session_state.stop_event.set()
+                st.session_state.app_state = "idle"
+                _status.update(label="Stopped", state="error", expanded=False)
+                st.rerun()
+
+        if out.get("done"):
+            st.session_state.app_state = "done"
+            st.rerun()
+        else:
+            time.sleep(0.5)
             st.rerun()
 
-    if out.get("done"):
-        st.session_state.app_state = "done"
-        st.rerun()
+    # render result
+    if st.session_state.app_state == "done":
+        out = st.session_state.search_out
+        if out.get("error"):
+            st.error(f"Error: {out['error']}")
+            st.stop()
+        if out.get("cancelled") or not out.get("result"):
+            st.info("Search stopped.")
+            st.stop()
+
+        result = out["result"]
+
+        # Seed translation cache
+        search_lang = st.session_state.search_language or language
+        if search_lang not in st.session_state.translations:
+            st.session_state.translations[search_lang] = result["final_response"]
+
+        # Translate on toggle
+        if language not in st.session_state.translations:
+            with st.spinner(f"Translating to {'English' if language == 'en' else 'Dutch'}..."):
+                st.session_state.translations[language] = _translate(
+                    st.session_state.translations[search_lang], language
+                )
+
+        # Save to history (once, keyed by conv_id in session state)
+        if "current_conv_id" not in st.session_state:
+            settings = {
+                "language": search_lang,
+                "mode": mode,
+                "pedagogical": pedagogical,
+                "include_manifestos": include_manifestos,
+                "include_tk": include_tk,
+                "include_cbs": include_cbs,
+            }
+            st.session_state.current_conv_id = save_conversation(st.session_state.last_query, result, settings)
+
+        _render_result(result, language, translations=st.session_state.translations)
+
+
+# ── history tab ───────────────────────────────────────────────────────────────
+with tab_history:
+    convos = load_history()
+    if not convos:
+        st.info("No past searches yet. Run a query and it will appear here.")
     else:
-        import time; time.sleep(0.5)
-        st.rerun()
+        st.caption(f"{len(convos)} saved {'search' if len(convos) == 1 else 'searches'}")
+        for c in convos:
+            ts = c.get("timestamp", "")[:16].replace("T", " ")
+            q = c.get("query", "")
+            settings = c.get("settings", {})
+            lang_label = "EN" if settings.get("language") == "en" else "NL"
+            header = f"{ts} · {lang_label} · {q[:70]}"
 
-# ── render result ────────────────────────────────────────────────────────────
-if st.session_state.app_state == "done":
-    out = st.session_state.search_out
-    if out.get("error"):
-        st.error(f"Error: {out['error']}")
-        st.stop()
-    if out.get("cancelled") or not out.get("result"):
-        st.info("Search stopped.")
-        st.stop()
+            with st.expander(header):
+                col_info, col_del = st.columns([9, 1])
+                with col_info:
+                    tags = []
+                    if settings.get("include_manifestos"):
+                        tags.append("manifestos")
+                    if settings.get("include_tk"):
+                        tags.append("TK")
+                    if settings.get("include_cbs"):
+                        tags.append("CBS")
+                    if tags:
+                        st.caption(f"Sources: {', '.join(tags)} · {settings.get('mode', 'deep')} mode")
+                with col_del:
+                    if st.button("Delete", key=f"del_{c['id']}"):
+                        delete_conversation(c["id"])
+                        st.rerun()
 
-    result = out["result"]
-
-    # Seed the translation cache with the language the search was run in
-    search_lang = st.session_state.search_language or language
-    if search_lang not in st.session_state.translations:
-        st.session_state.translations[search_lang] = result["final_response"]
-
-    # Translate on toggle if we don't have this language cached yet
-    if language not in st.session_state.translations:
-        with st.spinner(f"Translating to {'English' if language == 'en' else 'Dutch'}..."):
-            st.session_state.translations[language] = _translate(
-                st.session_state.translations[search_lang], language
-            )
-
-    main_text, sources_text = _split_sources(st.session_state.translations[language])
-
-    with st.container(border=True):
-        st.markdown(_render_footnotes(main_text), unsafe_allow_html=True)
-
-    if sources_text:
-        st.markdown(
-            f'<div class="source-footer">{_render_source_nums(sources_text)}</div>',
-            unsafe_allow_html=True,
-        )
-
-    passages = result.get("political_passages", [])
-    pol_raw = result.get("political_response", "")
-    data_raw = result.get("data_response", "")
-
-    tab_labels = (["Parliamentary passages"] if passages else []) + (
-        ["Political analyst"] if pol_raw else []
-    ) + (["Data analyst"] if data_raw else [])
-
-    if tab_labels:
-        tabs = st.tabs(tab_labels)
-        tab_idx = 0
-
-        if passages:
-            with tabs[tab_idx]:
-                for p in passages:
-                    meta = p["metadata"]
-                    party = meta.get("party_name", "")
-                    color = _party_color(party)
-                    score = p.get("relevance_score", "")
-                    score_str = f" &nbsp;·&nbsp; relevance {score}" if score else ""
-                    st.markdown(
-                        f'<div class="party-passage" style="border-left: 4px solid {color};">'
-                        f'<strong>{meta.get("source", "?")} ({meta.get("year", "?")})</strong>'
-                        f'<span style="color:#6b7c8a; font-size:0.8rem;">{score_str}</span><br/><br/>'
-                        f'{p["text"]}'
-                        f"</div>",
-                        unsafe_allow_html=True,
-                    )
-            tab_idx += 1
-
-        if pol_raw:
-            with tabs[tab_idx]:
-                st.markdown(pol_raw)
-            tab_idx += 1
-
-        if data_raw:
-            with tabs[tab_idx]:
-                st.markdown(data_raw)
+                _render_result(c, settings.get("language", "nl"))
