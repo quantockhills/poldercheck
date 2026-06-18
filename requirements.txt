@@ -17,6 +17,7 @@ streamlit
 pypdf
 requests
 httpx
+duckdb
 python-dotenv
 pytest
 ragas

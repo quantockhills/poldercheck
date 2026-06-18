@@ -9,11 +9,11 @@ from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
 
 from src.agents.config import AGENT_CONFIGS
-from src.agents.data import CBS_NOT_FOUND, run_data_analyst
+from src.agents.data import CBS_NOT_FOUND, CBS_PROCESS_FAILED, run_data_analyst
 from src.agents.political import run_political_analyst_v2
 
-DATA_NODE_TIMEOUT_FAST_S = 90
-DATA_NODE_TIMEOUT_DEEP_S = 150
+DATA_NODE_TIMEOUT_FAST_S = 300
+DATA_NODE_TIMEOUT_DEEP_S = 300
 
 
 class PolderState(TypedDict):
@@ -24,6 +24,7 @@ class PolderState(TypedDict):
     include_manifestos: bool  # if False, static search uses only CPB/PBL (no party PDFs)
     include_tk: bool  # if False, skips OpenTK live parliamentary search
     include_cbs: bool  # if False, skips CBS data node entirely
+    cbs_mode: str  # "mcp" | "duckdb"
     num_datasets: int  # how many CBS datasets to query
     cbs_queries: list  # LLM-generated Dutch CBS search term variants
     political_response: str
@@ -117,6 +118,7 @@ async def data_node(state: PolderState, config=None) -> dict:
                 political_context=political if political else None,
                 mode=mode,
                 num_datasets=state.get("num_datasets", 3),
+                cbs_mode=state.get("cbs_mode", "mcp"),
                 on_status=on_status,
                 callbacks=outer_callbacks,
             ),
@@ -124,7 +126,7 @@ async def data_node(state: PolderState, config=None) -> dict:
         )
     except (TimeoutError, Exception) as exc:
         print(f"DEBUG_LOG: data node failed/timed out: {type(exc).__name__}: {exc}")
-        response = CBS_NOT_FOUND
+        response = CBS_PROCESS_FAILED
     print(f"DEBUG_LOG: data node took {time.monotonic() - t0:.1f}s")
     return {"data_response": response}
 
@@ -257,6 +259,7 @@ async def run_query(
     include_manifestos: bool = True,
     include_tk: bool = True,
     include_cbs: bool = True,
+    cbs_mode: str = "mcp",
     num_datasets: int = 3,
     extra_callbacks: list | None = None,
     on_status=None,
@@ -270,6 +273,7 @@ async def run_query(
         include_manifestos=include_manifestos,
         include_tk=include_tk,
         include_cbs=include_cbs,
+        cbs_mode=cbs_mode,
         num_datasets=num_datasets,
         cbs_queries=[],
         political_response="",

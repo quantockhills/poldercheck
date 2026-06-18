@@ -6,6 +6,8 @@ deep mode: React agent — search_cbs_catalog (ChromaDB) for discovery,
 """
 
 import asyncio
+import io
+import tempfile
 from pathlib import Path
 
 import mcp.types
@@ -16,6 +18,28 @@ from langchain_openai import ChatOpenAI
 
 from src.agents.config import AGENT_CONFIGS
 from src.ingest.retrieve import retrieve_cbs_datasets
+
+_duck: "duckdb.DuckDBPyConnection | None" = None
+_duck_gen: int = 0  # incremented each _run_duckdb_parallel to isolate runs
+
+
+def _get_duck():
+    global _duck
+    if _duck is None:
+        import duckdb
+        _duck = duckdb.connect(":memory:")
+    return _duck
+
+
+def _reset_duck():
+    """Drop all tables so stale data doesn't leak between runs."""
+    global _duck
+    if _duck is not None:
+        tables = _duck.execute(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = 'main'"
+        ).fetchall()
+        for (t,) in tables:
+            _duck.execute(f'DROP TABLE IF EXISTS "{t}"')
 
 
 @tool
@@ -74,6 +98,11 @@ def _system_prompt() -> str:
 CBS_NOT_FOUND = (
     "I could not find a CBS dataset relevant to this query. The data may exist "
     "under a different search term, or may not be available in CBS StatLine."
+)
+
+CBS_PROCESS_FAILED = (
+    "The CBS data retrieval process failed. This may be due to a timeout "
+    "or connection issue with the CBS StatLine API."
 )
 
 _MCP_CONFIG = {
@@ -305,14 +334,339 @@ async def _run_deep(
                 ]
             },
             config={
-                "recursion_limit": 40,
+                "recursion_limit": 100,
                 "callbacks": callbacks or [],
             },
         )
 
     response_text = result["messages"][-1].content
     if "need more steps" in response_text.lower():
-        return CBS_NOT_FOUND
+        return CBS_PROCESS_FAILED
+    return response_text
+
+
+@tool
+def download_cbs_dataset(dataset_id: str) -> str:
+    """Download a CBS dataset as CSV and load it into DuckDB for SQL queries.
+    After downloading, query tables like {dataset_id}_Observations, {dataset_id}_MeasureCodes.
+    Always join with MeasureCodes to get readable measure labels.
+    """
+    import duckdb
+    import requests
+    import zipfile
+    duck = _get_duck()
+    try:
+        resp = requests.get(
+            f"https://datasets.cbs.nl/CSV/CBS/nl/{dataset_id}", timeout=45
+        )
+        resp.raise_for_status()
+        z = zipfile.ZipFile(io.BytesIO(resp.content))
+        tables = []
+        for name in z.namelist():
+            if not name.endswith(".csv"):
+                continue
+            raw_table = f"{dataset_id}_{name.replace('.csv', '')}"
+            table = f'"{raw_table}"'
+            content = z.read(name).decode("utf-8-sig")
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".csv", delete=False) as f:
+                f.write(content)
+                tmp = f.name
+            duck.execute(
+                f"CREATE OR REPLACE TABLE {table} AS "
+                f"SELECT * FROM read_csv_auto('{tmp}', delim=';')"
+            )
+            tables.append(raw_table)
+        return f"Loaded {dataset_id}. Tables: {', '.join(tables)}"
+    except Exception as exc:
+        return f"Failed to download {dataset_id}: {exc}"
+
+
+@tool
+def run_sql(sql: str) -> str:
+    """Run a SQL query against DuckDB. Use fully qualified table names
+    like "85773NED_Observations". Join with MeasureCodes to get labels.
+    Always use LIMIT to avoid flooding the context with large results.
+    """
+    import duckdb
+    duck = _get_duck()
+    try:
+        result = duck.execute(sql).fetchdf()
+        text = result.to_string(max_rows=100)
+        if len(text) > 3000:
+            text = text[:3000] + f"\n... (truncated {len(text) - 3000} more chars)"
+        return text
+    except Exception as exc:
+        return f"SQL error: {exc}"
+
+
+async def _run_duckdb_parallel(
+    query: str,
+    cbs_queries: list[str],
+    political_context: str | None,
+    llm: ChatOpenAI,
+    num_datasets: int = 3,
+    on_status=None,
+    callbacks: list | None = None,
+) -> str:
+    """Orchestrator–worker graph: fan out to N parallel DuckDB agents, one per dataset."""
+    from typing import Annotated
+    import operator
+    from langgraph.graph import StateGraph, START, END
+    from langgraph.types import Send
+    from langgraph.prebuilt import create_react_agent
+    from typing_extensions import TypedDict
+
+    _reset_duck()  # prevent stale data from previous runs
+
+    class WorkerState(TypedDict):
+        dataset_id: str
+        query: str
+        result: str
+
+    class OrchestratorState(TypedDict):
+        query: str
+        dataset_ids: list[str]
+        findings: Annotated[list[str], operator.add]
+        final_response: str
+
+    political_section = _political_section(political_context)
+    search_hints = ", ".join(cbs_queries[:7]) if cbs_queries else query
+
+    # Warm up the catalog collection
+    try:
+        retrieve_cbs_datasets([search_hints], n_results=1)
+    except Exception as exc:
+        print(f"DEBUG_LOG: could not warm up CBS catalog: {exc}")
+
+    # Build worker LLM (flash is cheaper for per-dataset analysis)
+    from src.agents.config import AGENT_CONFIGS
+
+    worker_cfg = AGENT_CONFIGS["data_analyst"]
+    worker_llm = ChatOpenAI(
+        base_url=worker_cfg["base_url"],
+        api_key=worker_cfg["api_key"],
+        model=worker_cfg["model"],
+        max_tokens=800,
+        timeout=45,
+        max_retries=1,
+    )
+
+    async def discover_node(state: OrchestratorState) -> dict:
+        seen_terms: set[str] = set()
+        candidates: dict[str, str] = {}  # id -> title (found but not yet judged)
+        relevant: dict[str, str] = {}  # id -> title (judged relevant)
+
+        async def _eval() -> None:
+            if not candidates:
+                return
+            prompt = (
+                f"Query: {query}\n\n"
+                f"Dataset titles:\n" +
+                "\n".join(f"  {k}: {v}" for k, v in candidates.items()) +
+                "\n\nWhich of these CBS datasets are genuinely relevant to the query? "
+                "Return only the relevant IDs, one per line, nothing else. "
+                "If none are relevant, return 'NONE'."
+            )
+            judge = await llm.bind(extra_body={
+                "thinking": {"type": "enabled", "effort": "medium"},
+            }).ainvoke([{"role": "user", "content": prompt}])
+            for token in judge.content.strip().split():
+                tid = token.strip(",. \n")
+                if tid in candidates:
+                    relevant[tid] = candidates[tid]
+            candidates.clear()
+
+        for attempt in range(25):
+            # Generate new search terms
+            search = await llm.bind(extra_body={
+                "thinking": {"type": "enabled", "effort": "medium"},
+            }).ainvoke([
+                {"role": "user", "content": (
+                    f"Query: {query}\n"
+                    f"Already searched terms: {', '.join(seen_terms) or 'none'}\n"
+                    f"Already found datasets: {', '.join(relevant.values()) or 'none'}\n\n"
+                    f"Iteration {attempt + 1}. Generate 3 Dutch CBS search terms "
+                    "that might find datasets relevant to the query. "
+                    "Return one per line, nothing else."
+                )}
+            ])
+            try:
+                raw = search.content.strip()
+                new_terms = [t.strip() for t in raw.split("\n") if t.strip() and t.strip() not in seen_terms]
+            except Exception:
+                new_terms = []
+
+            if not new_terms:
+                break
+
+            if on_status:
+                on_status(f"CBS search: *{', '.join(new_terms)}*")
+
+            seen_terms.update(new_terms)
+            for c in retrieve_cbs_datasets(list(new_terms), n_results=5):
+                if c["identifier"] not in relevant and c["identifier"] not in candidates:
+                    candidates[c["identifier"]] = c["title"]
+
+            # Every few iterations, judge candidate relevance
+            if candidates and (len(relevant) < num_datasets and attempt % 2 == 0):
+                await _eval()
+
+            if on_status and candidates:
+                on_status(f"  found: *{'; '.join(candidates.keys())}*")
+            if on_status and relevant:
+                on_status(f"  relevant: *{'; '.join(f'{k}: {v[:40]}' for k, v in relevant.items())}*")
+
+            if len(relevant) >= num_datasets:
+                break
+
+        # Final evaluation of remaining candidates
+        if candidates and len(relevant) < num_datasets:
+            await _eval()
+
+        print(f"DEBUG_LOG: discovered {len(relevant)} relevant datasets: {list(relevant.keys())}")
+        return {"dataset_ids": list(relevant.keys())[:num_datasets]}
+
+    def fanout(state: OrchestratorState) -> list[Send]:
+        if not state["dataset_ids"]:
+            return [Send("synthesize", {})]
+        return [Send("worker", {"dataset_id": did, "query": query}) for did in state["dataset_ids"]]
+
+    async def worker_node(state: WorkerState) -> dict:
+        did = state["dataset_id"]
+        search_for = state["query"]
+
+        # 1. Download CSV
+        download_result = download_cbs_dataset.invoke({"dataset_id": did})
+
+        # 2. Mini React agent explores this dataset with SQL
+        worker_tools = [run_sql, get_cbs_measure_labels]
+        agent = create_react_agent(worker_llm, worker_tools)
+
+        sys_prompt = _system_prompt()
+        user_prompt = (
+            f"Dataset: {did}\n"
+            f"User question: {search_for}\n\n"
+            f"{download_result}\n\n"
+            "Steps:\n"
+            "1. Explore the dataset: run_sql('SELECT * FROM \"{did}_MeasureCodes\" LIMIT 5')\n"
+            "2. Find relevant measures and query the data\n"
+            "3. Return a concise summary (max 150 words) with numbers and [DatasetID, period] citations."
+        )
+
+        result = await agent.ainvoke(
+            {"messages": [
+                {"role": "system", "content": sys_prompt},
+                {"role": "human", "content": user_prompt},
+            ]},
+            config={"recursion_limit": 100, "callbacks": callbacks or []},
+        )
+
+        text = result["messages"][-1].content
+        if "need more steps" in text.lower():
+            text = f"Worker for {did} could not complete analysis."
+        return {"findings": [text]}
+
+    async def synthesize_node(state: OrchestratorState) -> dict:
+        if not state["findings"]:
+            return {"final_response": CBS_NOT_FOUND}
+
+        combined = "\n\n---\n\n".join(
+            f"Dataset finding:\n{f}" for f in state["findings"]
+        )
+
+        pol = f"\n\nPolitical context:\n{political_section}" if political_section else ""
+
+        response = await llm.ainvoke([
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": (
+                f"User query: {query}\n\n"
+                f"Findings from CBS datasets:\n{combined}{pol}\n\n"
+                "Write a single coherent response that:\n"
+                "- Opens by directly answering the query\n"
+                "- Presents the most important figures, labeled by dataset\n"
+                "- Notes where different datasets agree or diverge\n"
+                "- Is at most 300 words of prose\n"
+                "- Ends with ## Sources followed by numbered list"
+            )},
+        ])
+        return {"final_response": response.content}
+
+    # Build graph
+    builder = StateGraph(OrchestratorState)
+    builder.add_node("discover", discover_node)
+    builder.add_node("worker", worker_node)
+    builder.add_node("synthesize", synthesize_node)
+    builder.add_edge(START, "discover")
+    builder.add_conditional_edges("discover", fanout, ["worker", "synthesize"])
+    builder.add_edge("worker", "synthesize")
+    builder.add_edge("synthesize", END)
+
+    app = builder.compile()
+    state = await app.ainvoke({
+        "query": query,
+        "dataset_ids": [],
+        "findings": [],
+        "final_response": "",
+    }, {"callbacks": callbacks or []})
+    return state["final_response"]
+
+
+async def _run_deep_duckdb(
+    query: str,
+    cbs_queries: list[str],
+    political_context: str | None,
+    llm: ChatOpenAI,
+    num_datasets: int = 3,
+    callbacks: list | None = None,
+) -> str:
+    """React agent with DuckDB: download CBS CSVs and query with SQL."""
+    from langgraph.prebuilt import create_react_agent
+
+    political_section = _political_section(political_context)
+    standalone = not political_section
+    search_hints = ", ".join(cbs_queries[:7]) if cbs_queries else query
+
+    try:
+        retrieve_cbs_datasets([search_hints], n_results=1)
+    except Exception as exc:
+        print(f"DEBUG_LOG: could not warm up CBS catalog: {exc}")
+
+    tools = [
+        search_cbs_catalog,
+        get_cbs_measure_labels,
+        download_cbs_dataset,
+        run_sql,
+    ]
+
+    _STEPS = (
+        f"Steps:\n"
+        "1. Call search_cbs_catalog 3-5 times to find datasets.\n"
+        f"2. Select up to {num_datasets} datasets. For each, call download_cbs_dataset "
+        "to load it into DuckDB. Then query with run_sql. "
+        "Observations.csv has raw Measure codes; join with MeasureCodes to get labels.\n"
+        "3. Explore the data with SQL: run_sql(\"SELECT * FROM {id}_Observations LIMIT 5\"). "
+        "Then write targeted queries to answer the question.\n"
+        "4. Present findings with inline [DatasetID, period] citations."
+    )
+
+    user_content = (
+        f"User query: {query}\n\n"
+        + ("Interpret the query broadly — find datasets that shed light on the topic.\n\n" if standalone else "")
+        + _STEPS
+    )
+
+    agent = create_react_agent(llm, tools)
+    result = await agent.ainvoke(
+        {"messages": [
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": user_content},
+        ]},
+        config={"recursion_limit": 100, "callbacks": callbacks or []},
+    )
+
+    response_text = result["messages"][-1].content
+    if "need more steps" in response_text.lower():
+        return CBS_PROCESS_FAILED
     return response_text
 
 
@@ -322,6 +676,7 @@ async def run_data_analyst(
     political_context: str | None = None,
     mode: str = "deep",
     num_datasets: int = 3,
+    cbs_mode: str = "mcp",
     on_status=None,
     callbacks: list | None = None,
 ) -> str:
@@ -339,5 +694,11 @@ async def run_data_analyst(
     if mode == "fast":
         return await _run_fast(query, queries, political_context, llm, on_status)
 
-    # Deep: agent drives its own search via search_cbs_catalog tool + CBS MCP
+    if cbs_mode == "duckdb":
+        return await _run_duckdb_parallel(
+            query, queries, political_context, llm, num_datasets,
+            on_status=on_status, callbacks=callbacks,
+        )
+
+    # Deep (MCP)
     return await _run_deep(query, queries, political_context, llm, num_datasets, callbacks)

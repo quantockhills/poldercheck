@@ -81,11 +81,21 @@ query_planner → political → data → synthesis
 
 ### Data analyst (`src/agents/data.py`)
 
+Two CBS query modes, switchable from the Streamlit sidebar:
+
+**MCP mode** (default):
 - Fast mode: semantic search over `cbs_catalog`, then parallel direct OData v4 HTTP fetches of top datasets (`httpx`).
 - Deep mode: React agent that discovers datasets via `search_cbs_catalog` (ChromaDB), then calls the CBS MCP server (`mcp-cbs-cijfers-open-data --stdio`) for `get_dimensions`, `get_dimension_values`, and `query_observations`.
 - The deep agent must never hardcode a year filter such as `startswith(Perioden,'2020')`; use `$orderby=Perioden desc` for recent figures and fetch full series for trends.
+- Per-tool 30s timeout so one slow CBS API response doesn't hang the batch.
 - Protocol version is pinned process-wide: `mcp.types.LATEST_PROTOCOL_VERSION = "2024-11-05"`.
 - If the MCP binary is missing from PATH, deep mode falls back to fast mode.
+
+**DuckDB mode** (alternative, sidebar toggle):
+- Downloads the CBS dataset as CSV ZIP (`https://datasets.cbs.nl/CSV/CBS/nl/{id}`) and loads into an in-memory DuckDB.
+- Agent writes SQL directly via `run_sql` tool, joins with `MeasureCodes` to get readable column labels.
+- No MCP server, no serialization bottlenecks, no timeouts.
+- Each dataset's tables are named `"85773NED_Observations"`, `"85773NED_MeasureCodes"`, etc. (quoted identifiers).
 
 ### Synthesis (`src/graph.py`)
 
