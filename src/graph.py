@@ -67,9 +67,12 @@ async def query_planner_node(state: PolderState) -> dict:
     return {"cbs_queries": cbs_queries}
 
 
-async def political_node(state: PolderState) -> dict:
+async def political_node(state: PolderState, config=None) -> dict:
     """Political analyst node: static corpus + live OpenTK parliamentary search."""
     t0 = time.monotonic()
+    outer_callbacks: list = []
+    if config:
+        outer_callbacks = config.get("callbacks") or []
     try:
         result = await run_political_analyst_v2(
             query=state["query"],
@@ -77,6 +80,7 @@ async def political_node(state: PolderState) -> dict:
             mode=state.get("mode", "deep"),
             include_manifestos=state.get("include_manifestos", True),
             include_tk=state.get("include_tk", True),
+            callbacks=outer_callbacks if outer_callbacks else None,
         )
     except Exception as exc:
         print(f"DEBUG_LOG: political node failed: {type(exc).__name__}: {exc}")

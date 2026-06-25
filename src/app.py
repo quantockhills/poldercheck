@@ -211,9 +211,9 @@ def _render_result(result: dict, display_language: str, translations: dict | Non
         st.info("No response available.")
         return
 
-    elapsed = result.get("elapsed")
+    elapsed = result.get("_elapsed")
     if elapsed:
-        st.caption(f"Completed in {elapsed}s")
+        st.caption(f"Completed in {elapsed // 60}:{elapsed % 60:02d}")
 
     # Use translations cache if provided (live search), otherwise render as-is
     if translations is not None:
@@ -287,10 +287,12 @@ st.markdown(
         margin: 0.5rem 0;
         font-size: 0.9rem;
         background-color: #ffffff;
+        color: #1a1a2e;
     }
+    .party-passage * { color: #1a1a2e; }
     .source-footer {
         font-size: 0.85rem;
-        color: #4a5568;
+        color: #2d3748;
         background-color: #f0f4f8;
         border-radius: 8px;
         padding: 0.75rem 1rem;
@@ -469,6 +471,8 @@ with tab_search:
             st.stop()
 
         result = out["result"]
+        if "elapsed" in out:
+            result["_elapsed"] = out["elapsed"]
 
         # Seed translation cache
         search_lang = st.session_state.search_language or language

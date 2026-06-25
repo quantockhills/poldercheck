@@ -585,6 +585,7 @@ async def _run_duckdb_parallel(
                 "- Opens by directly answering the query\n"
                 "- Presents the most important figures, labeled by dataset\n"
                 "- Notes where different datasets agree or diverge\n"
+                "- If the data only covers part of the asked time period, say 'in the datasets we queried, data starts from year X' — do NOT definitively say the data doesn't exist before that year. Add that searching with more or different terms might find older data.\n"
                 "- Is at most 300 words of prose\n"
                 "- Ends with ## Sources followed by numbered list"
             )},

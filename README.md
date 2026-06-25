@@ -144,6 +144,8 @@ AGENT_CONFIGS = {
 }
 ```
 
+This is not just about model choice. By default, every query you type is sent to your configured LLM provider, and the retrieval agents call live APIs (OpenTK for parliamentary data, CBS for statistics). Third parties can log what you are asking about. For searches about politically sensitive topics, personal circumstances, or professional situations where you would rather not leave a trail, running your own model keeps the LLM calls entirely local. Point each agent to vLLM, Ollama, or any OpenAI-compatible server running on `localhost`, and the system behaves exactly as it would against a cloud API. The parliamentary and statistical data sources still need the internet (they have no local mirror), but your actual queries never leave your infrastructure.
+
 **Full tech stack:**
 - Agent orchestration: LangGraph
 - LLM calls: `openai` Python SDK with configurable `base_url`

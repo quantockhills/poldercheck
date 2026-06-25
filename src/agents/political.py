@@ -78,15 +78,155 @@ def run_political_analyst(query: str, prior_context: str | None = None, language
 
 OPENTK_NOT_FOUND = "No relevant recent parliamentary debates found via OpenTK for this query."
 
-OPENTK_TIMEOUT_S = 150
+OPENTK_TIMEOUT_S = 300
+
+from pathlib import Path
 
 _MCP_CONFIG = {
     "opentk": {
-        "command": "npx",
-        "args": ["-y", "@r-huijts/opentk-mcp"],
+        "command": "node",
+        "args": [str(Path(__file__).parent.parent.parent / "docs" / "opentk-mcp" / "dist" / "index.js")],
         "transport": "stdio",
     }
 }
+
+_ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
+_MCP_BIN = str(Path(__file__).parent.parent.parent / "docs" / "opentk-mcp" / "dist" / "index.js")
+
+
+async def discover_odata(
+    keywords: list[str] | None = None,
+    date_from: str = "2020-01-01",
+    date_to: str = "2026-01-01",
+    doc_type: str = "Stenogram",
+    max_docs: int = 50,
+    search_terms: list[str] | None = None,
+    parallel: int = 8,
+    top_n_for_excerpts: int = 10,
+) -> list[dict]:
+    """Query the official TK OData API for documents, then analyze relevance via OpenTK MCP.
+
+    Steps:
+    1. OData Document search: filter by date range + keyword (Onderwerp) + type (Soort)
+    2. For each result, run OpenTK MCP's analyze_document_relevance
+    3. For top N results, run find_party_in_document for each party to get excerpts
+    4. Return ranked list with scores, parties, excerpts, and metadata.
+
+    Args:
+        keywords: Dutch terms to search for in document subject (Onderwerp).
+        date_from: Start date (YYYY-MM-DD).
+        date_to: End date (YYYY-MM-DD).
+        doc_type: Document type filter (e.g. 'Stenogram', 'Motie'). None = all types.
+        max_docs: Maximum documents to fetch from OData.
+        search_terms: Terms passed to OpenTK for relevance scoring.
+        parallel: Max concurrent MCP processes.
+        top_n_for_excerpts: How many top docs to extract party snippets from.
+
+    Returns:
+        List of dicts, ranked by relevance score descending.
+        Each dict: {doc_id, datum, onderwerp, score, parties, n_parties, chars, party_excerpts}
+        party_excerpts: {party_name: [snippet_str, ...]}
+    """
+    import httpx, json, subprocess
+    from urllib.parse import quote
+
+    keywords = keywords or ["migratie", "immigratie", "asiel"]
+    _search_terms = search_terms or keywords
+
+    # Step 1: OData Document query
+    kw_filter = " or ".join(f"contains(Onderwerp,'{k}')" for k in keywords)
+    parts = [f"Verwijderd eq false", f"Datum ge {date_from}", f"Datum le {date_to}", f"({kw_filter})"]
+    if doc_type:
+        parts.append(f"Soort eq '{doc_type}'")
+    parts.append("not contains(tolower(Onderwerp),'stemming')")
+    odata_filter = " and ".join(parts)
+
+    async with httpx.AsyncClient(timeout=15) as c:
+        url = f"{_ODATA_BASE}/Document?$filter={quote(odata_filter)}&$select=DocumentNummer,Onderwerp,Datum&$orderby=Datum asc&$top={max_docs}"
+        resp = await c.get(url, headers={"Accept": "application/json"})
+        docs = resp.json().get("value", [])
+
+    if not docs:
+        return []
+
+    sem = asyncio.Semaphore(parallel)
+
+    async def _mcp_tool(tool: str, args: dict) -> dict | None:
+        """Call an OpenTK MCP tool and return the parsed result."""
+        proc = await asyncio.create_subprocess_exec(
+            "node", _MCP_BIN,
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        )
+        req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+            "name": tool, "arguments": args,
+        }})
+        try:
+            out, _ = await asyncio.wait_for(proc.communicate(input=(req + "\n").encode()), timeout=20)
+            data = json.loads(out.decode())
+            text = data["result"]["content"][0]["text"]
+            return json.loads(text)
+        except Exception:
+            return None
+        finally:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+    # Step 2: analyze_document_relevance (parallel)
+    async def _analyze(doc_id: str):
+        async with sem:
+            data = await _mcp_tool("analyze_document_relevance", {
+                "docId": doc_id, "searchTerms": _search_terms,
+            })
+            if data:
+                return {
+                    "score": data.get("relevanceScore", 0),
+                    "parties": data.get("entities", {}).get("parties", []),
+                    "chars": data.get("statistics", {}).get("characterCount", 0) or 0,
+                }
+            return {"score": -1, "parties": [], "chars": 0}
+
+    results = []
+    tasks = [_analyze(d["DocumentNummer"]) for d in docs]
+    for d, analysis in zip(docs, await asyncio.gather(*tasks)):
+        if analysis["score"] < 0:
+            continue
+        results.append({
+            "doc_id": d["DocumentNummer"],
+            "datum": str(d.get("Datum", ""))[:10],
+            "onderwerp": d.get("Onderwerp", ""),
+            "score": analysis["score"],
+            "parties": analysis["parties"],
+            "n_parties": len(analysis["parties"]),
+            "chars": analysis["chars"],
+            "party_excerpts": {},
+        })
+
+    results.sort(key=lambda r: r["score"], reverse=True)
+
+    # Step 3: find_party_in_document for top N docs (parallel per party per doc)
+    for rank, doc in enumerate(results[:top_n_for_excerpts]):
+        doc["rank"] = rank + 1
+        parties = doc["parties"]
+        if not parties:
+            continue
+        party_tasks = [
+            _mcp_tool("find_party_in_document", {"docId": doc["doc_id"], "partyName": p})
+            for p in parties[:8]  # max 8 parties per doc
+        ]
+        party_results = await asyncio.gather(*party_tasks)
+        excerpts: dict[str, list[str]] = {}
+        for party, pdata in zip(parties[:8], party_results):
+            if not pdata:
+                continue
+            occs = pdata.get("occurrences", [])
+            snips = [occ.get("snippet", "")[:200] for occ in occs[:3] if occ.get("snippet")]
+            if snips:
+                excerpts[party] = snips
+        doc["party_excerpts"] = excerpts
+
+    return results
 
 
 async def run_political_analyst_v2(
@@ -96,21 +236,24 @@ async def run_political_analyst_v2(
     mode: str = "deep",
     include_manifestos: bool = True,
     include_tk: bool = True,
+    callbacks: list | None = None,
 ) -> dict:
     """
     Political analyst with live OpenTK MCP search + static ChromaDB retrieval.
 
-    mode="fast": fixed pipeline — search → parallel analyze → parallel fetch → 1 LLM call (~25s)
-    mode="deep": React agent — flexible multi-step reasoning (~55s, more thorough)
+    Iterative discover: generates multiple Dutch search terms, searches both
+    manifestos and Tweede Kamer with each batch, judges relevance across all
+    collected sources, fetches top docs, and synthesizes in a single LLM call.
+    No workers needed — text sources are small enough to handle directly.
+
     include_manifestos: when False, static search covers only CPB/PBL (no party PDF manifesto chunks)
-    include_tk: when False, skips OpenTK live search and uses only the static corpus
+    include_tk: when False, skips OpenTK live parliamentary search and uses only the static corpus
     """
-    import re
+    import json as _json, re
 
     from langchain_mcp_adapters.client import MultiServerMCPClient
     from langchain_mcp_adapters.tools import load_mcp_tools
     from langchain_openai import ChatOpenAI
-    from langgraph.prebuilt import create_react_agent
 
     DEBUG_LOG = print
 
@@ -130,192 +273,53 @@ async def run_political_analyst_v2(
         max_retries=1,
     ).bind(parallel_tool_calls=True)
 
-    async def _run_fast() -> dict | None:
-        """Fixed pipeline: search → parallel analyze → parallel fetch → 1 LLM call."""
-        # Translate user query to Dutch keywords (OpenTK is Dutch-only)
-        kw_response = await llm.ainvoke(
-            [
-                {
-                    "role": "user",
-                    "content": (
-                        f"Convert this query to 1-2 Dutch keywords for searching the Dutch parliament "
-                        f"(Tweede Kamer) database. Single words only, no phrases, no explanation.\n\nQuery: {query}"
-                    ),
-                }
-            ]
-        )
-        dutch_query = kw_response.content.strip().split("\n")[0].strip()
-        DEBUG_LOG(f"DEBUG_LOG: fast pipeline Dutch query: {dutch_query!r}")
+    if callbacks:
+        llm = llm.with_config({"callbacks": callbacks})
 
-        mcp_client = MultiServerMCPClient(_MCP_CONFIG)
-        async with mcp_client.session("opentk") as session:
-            tools = {t.name: t for t in await load_mcp_tools(session)}
+    async def _run_iterative() -> dict:
+        """Run the political discover via LangGraph subgraph for tracing + state management."""
+        from src.agents.political_discover import build_political_discover_graph
 
-            # 1. Search for documents (type=Document gives Document IDs directly)
-            search_raw = await tools["search_tk_filtered"].ainvoke(
-                {"query": dutch_query, "type": "Document", "limit": 6, "format": "full"}
-            )
-            search_text = search_raw[0]["text"] if isinstance(search_raw, list) else str(search_raw)
-            doc_ids = list(dict.fromkeys(re.findall(r"\b\d{4}D\d+\b", search_text)))
-            DEBUG_LOG(f"DEBUG_LOG: fast pipeline found doc IDs: {doc_ids[:5]}")
-
-            if not doc_ids:
-                return None
-
-            # 2. Analyze relevance in parallel
-            search_terms = query.split()[:5]
-            analyses = await asyncio.gather(
-                *[
-                    tools["analyze_document_relevance"].ainvoke({"docId": did, "searchTerms": search_terms})
-                    for did in doc_ids[:5]
-                ],
-                return_exceptions=True,
-            )
-
-            scored = []
-            for did, analysis in zip(doc_ids[:5], analyses):
-                if isinstance(analysis, Exception):
-                    continue
-                text = analysis[0]["text"] if isinstance(analysis, list) else str(analysis)
-                nums = [int(n) for n in re.findall(r"\b(\d{1,3})\b", text) if int(n) <= 100]
-                scored.append((max(nums, default=0), did))
-            scored.sort(reverse=True)
-            top_ids = [did for _, did in scored[:2]] or doc_ids[:2]
-
-            # 3. Fetch content in parallel
-            contents = await asyncio.gather(
-                *[tools["get_document_content"].ainvoke({"docId": did, "maxLength": 2500}) for did in top_ids],
-                return_exceptions=True,
-            )
-
-            docs_block = "\n\n---\n\n".join(
-                f"Document {did}:\n{c[0]['text'] if isinstance(c, list) else str(c)}"
-                for did, c in zip(top_ids, contents)
-                if not isinstance(c, Exception)
-            )
-            if not docs_block:
-                return None
-
-            # 4. Single LLM synthesis
-            response = await llm.ainvoke(
-                [
-                    {"role": "system", "content": _system_prompt(language)},
-                    {
-                        "role": "user",
-                        "content": (
-                            f"Query: {query}\n\n"
-                            f"Retrieved passages from static corpus (manifestos, CPB, PBL):\n\n{static_context}\n\n"
-                            f"Parliamentary documents from Tweede Kamer:\n\n{docs_block}\n\n"
-                            f"Cite each parliamentary document by its ID and date."
-                        ),
-                    },
-                ]
-            )
-        return {"response": response.content, "passages": static_passages}
-
-    async def _run_deep() -> dict:
-        """React agent: flexible multi-step reasoning over OpenTK tools + manifesto corpus."""
-        from langchain_core.tools import StructuredTool
-
-        retrieved_passages: list = []
-
-        def _search_manifesto(query: str) -> str:
-            passages = retrieve_static(query, n_results=8, include_manifestos=include_manifestos)
-            for p in passages:
-                if p not in retrieved_passages:
-                    retrieved_passages.append(p)
-            if not passages:
-                return "No relevant passages found in manifesto/CPB/PBL corpus."
-            return format_for_prompt(passages)
-
-        manifesto_tool = StructuredTool.from_function(
-            func=_search_manifesto,
-            name="search_manifesto_corpus",
-            description=(
-                "Search party manifestos, CPB (Central Planning Bureau), and PBL "
-                "(Environmental Assessment Agency) reports using semantic search. "
-                "Call with a Dutch policy term (e.g. 'woningmarkt', 'klimaatbeleid', "
-                "'huurtoeslag'). Call multiple times with different terms to find more "
-                "relevant passages. Evaluate whether results are relevant before using them."
-            ),
-        )
-
-        if include_manifestos:
-            manifesto_intro = (
-                "Start by calling search_manifesto_corpus 3-4 times with different Dutch policy "
-                "terms to find relevant party manifesto/CPB/PBL passages. Evaluate relevance "
-                "of the results before using them.\n\n"
-            )
-        else:
-            manifesto_intro = ""
-
-        user_content = (
-            f"Query: {query}\n\n"
-            + manifesto_intro
-            + "Use search_tk_filtered (type=Activiteit) to find recent parliamentary "
-            "debates. After search_tk returns results, call analyze_document_relevance on "
-            "ALL returned documents simultaneously in a single response. Then load the top 2 "
-            "most relevant documents using get_document_content. "
-            "Cite the document title and date for any parliamentary source you use."
-        )
-        if prior_context:
-            user_content += f"\n\nCBS data context:\n{prior_context}"
-
-        mcp_client = MultiServerMCPClient(_MCP_CONFIG)
-        async with mcp_client.session("opentk") as session:
-            opentk_tools = await load_mcp_tools(session)
-            tools = ([manifesto_tool] if include_manifestos else []) + opentk_tools
-            agent = create_react_agent(llm, tools)
-            result = await agent.ainvoke(
-                {
-                    "messages": [
-                        {"role": "system", "content": _system_prompt(language)},
-                        {"role": "user", "content": user_content},
-                    ]
-                },
-                config={"recursion_limit": 60},
-            )
-        response_text = result["messages"][-1].content
-        # LangGraph emits this string when it hits the recursion limit mid-run
-        if "need more steps" in response_text.lower():
-            response_text = (
-                "I did not find relevant information on this topic in the current corpus. "
-                "Other sources may exist that I do not have access to."
-            )
-        return {"response": response_text, "passages": retrieved_passages}
+        graph = build_political_discover_graph()
+        initial_state = {
+            "query": query,
+            "language": language,
+            "include_manifestos": include_manifestos,
+            "include_tk": include_tk,
+            "search_terms": [],
+            "date_from": "",
+            "date_to": "",
+            "static_passages": [],
+            "year_buckets": [],
+            "odata_results": [],
+            "opentk_docs": "",
+            "final_response": "",
+            "error": None,
+        }
+        config: dict = {}
+        if callbacks:
+            config["callbacks"] = callbacks
+        result = await graph.ainvoke(initial_state, config=config)
+        return {
+            "response": result.get("final_response", "No response generated."),
+            "passages": result.get("static_passages", []),
+        }
 
     async def _run_with_opentk() -> dict:
-        if mode == "fast":
-            result = await _run_fast()
-            if result is not None:
-                return result
-            DEBUG_LOG("DEBUG_LOG: fast pipeline returned no results, falling back to deep")
-        return await _run_deep()
-
-    if not include_tk:
-        DEBUG_LOG("DEBUG_LOG: Tweede Kamer search disabled — static corpus only")
-        response = await llm.ainvoke(
-            [
-                {"role": "system", "content": _system_prompt(language)},
-                {"role": "user", "content": f"Query: {query}\n\nStatic corpus:\n\n{static_context}"},
-            ]
-        )
-        return {"response": response.content, "passages": static_passages}
+        return await _run_iterative()
 
     try:
         return await asyncio.wait_for(_run_with_opentk(), timeout=OPENTK_TIMEOUT_S)
     except Exception as exc:
         DEBUG_LOG(f"DEBUG_LOG: OpenTK MCP unavailable, falling back to static-only: {exc}")
-        response = await llm.ainvoke(
-            [
-                {"role": "system", "content": _system_prompt(language)},
-                {
-                    "role": "user",
-                    "content": (
-                        f"Query: {query}\n\nStatic corpus:\n\n{static_context}\n\n"
-                        f"Note: live parliamentary search is unavailable. {OPENTK_NOT_FOUND}"
-                    ),
-                },
-            ]
-        )
+        response = await llm.ainvoke([
+            {"role": "system", "content": _system_prompt(language)},
+            {
+                "role": "user",
+                "content": (
+                    f"Query: {query}\n\nStatic corpus:\n\n{static_context}\n\n"
+                    f"Note: live parliamentary search is unavailable. {OPENTK_NOT_FOUND}"
+                ),
+            },
+        ])
         return {"response": response.content, "passages": static_passages}
