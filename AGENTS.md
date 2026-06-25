@@ -15,6 +15,12 @@ Compact guide for working in this repo. For the public overview see `README.md`;
 1. `python -m venv venv && source venv/bin/activate`
 2. `pip install -r requirements.txt`
 3. Copy `.env.example` to `.env` and fill keys.
+4. Clone and build OpenTK MCP server (gitignored, required for political agent):
+   ```bash
+   git clone https://github.com/r-huijts/opentk-mcp docs/opentk-mcp
+   cd docs/opentk-mcp && npm install && npm run build
+   ```
+   Node must be in PATH.
 
 Required env vars (see `src/agents/config.py` for full resolution):
 
@@ -56,6 +62,9 @@ streamlit run src/app.py
 pytest tests/ -v
 pytest tests/test_response_contract.py -v
 
+# Lint
+ruff check src/ tests/
+
 # RAGAS eval (costs LLM-judge calls; only on main in CI)
 python src/eval/run_eval.py
 ```
@@ -69,15 +78,16 @@ query_planner → political → data → synthesis
 ```
 
 - `political` runs before `data`; the data analyst receives `political_response` as context.
-- `query_planner` only runs in `mode="fast"`, generating Dutch CBS search terms.
-- State toggles: `include_manifestos`, `include_tk`, `include_cbs`, plus `language` and `pedagogical`.
+- `query_planner` only runs in `mode="fast"`, generating Dutch CBS search terms. In deep mode it's a no-op (the CBS React agent discovers its own terms).
+- State toggles: `include_manifestos`, `include_tk`, `include_cbs`, `cbs_mode` ("mcp" | "duckdb"), plus `language` and `pedagogical`.
 
 ### Political analyst (`src/agents/political.py`)
 
 - Static retrieval from `poldercheck_static`.
-- Live Tweede Kamer search via the OpenTK MCP server (`npx -y @r-huijts/opentk-mcp`), launched over stdio. Requires Node/npm in PATH.
+- Live Tweede Kamer search via the OpenTK MCP server running from a local node build (`docs/opentk-mcp/dist/index.js`). This directory is gitignored — it must be cloned and built (see Environment setup above).
 - Falls back to static-only if OpenTK is unavailable.
-- `mode="fast"` uses a fixed pipeline; `mode="deep"` uses a React agent.
+- All modes use an iterative LangGraph discover subgraph (`src/agents/political_discover.py`): LLM generates Dutch search terms → year-bucketed OData Document search → parallel OpenTK MCP relevance analysis + party excerpt extraction → LLM synthesis.
+- The `mode` parameter is accepted for API compatibility but the pipeline is the same regardless.
 
 ### Data analyst (`src/agents/data.py`)
 
@@ -100,7 +110,8 @@ Two CBS query modes, switchable from the Streamlit sidebar:
 ### Synthesis (`src/graph.py`)
 
 - Uses the `synthesis` agent config.
-- Prompt enforces inline `[Source, Year]` citations, max ~300 words, and a `## Sources` section.
+- Prompt enforces inline superscript citations (`^1`, `^2`), max ~300 words prose, and a `## Sources` section.
+- Streamlit renders superscript citations as blue HTML `<sup>` elements.
 
 ## Response contract
 
@@ -115,7 +126,8 @@ CI runs this via `pytest` on every push/PR. The RAGAS eval runs only on `main`.
 
 - **CBS catalog source of truth**: `data/catalog/cbs_catalog.jsonl` is committed. Refresh it with `python scripts/build_cbs_catalog.py`. ChromaDB rebuilds from this JSONL on first use.
 - **OData v4 only**: use `datasets.cbs.nl`. v3 `opendata.cbs.nl` identifiers with `ENG` suffix return 404.
-- **Embedding model mismatch in comments**: some headers say `Qwen3-Embedding-0.6B`, but the actual model in `src/ingest/embed.py` is `qwen/qwen3-embedding-8b`. Trust `EMBED_MODEL_ID`.
-- **Recency filtering**: `retrieve_cbs_datasets` prefers datasets whose `modified`/`period` year is ≥ 2015.
+- **Embedding model mismatch in comments**: `src/ingest/embed.py` header says `Qwen3-Embedding-0.6B`, but `EMBED_MODEL_ID` is actually `qwen/qwen3-embedding-8b`. Trust `EMBED_MODEL_ID`.
+- **Recency filtering**: `retrieve_cbs_datasets` prefers datasets whose `modified`/`period` year is >= 2015.
 - **Chunk.py is resumable**: it skips IDs already present in `poldercheck_static`, so re-running is safe.
-- **No opencode.json / .cursorrules** in this repo; this file is the only agent instructions source.
+- **OpenTK MCP is gitignored**: `docs/opentk-mcp/` contains a local fork of the OpenTK MCP server with patches for date filtering (`startDate`/`endDate`) and BM25 relevance sorting. It must be cloned and built separately (`npm install && npm run build`), and `node` must be in PATH.
+- **Synthesis uses thinking mode**: `reasoning_effort: "high"` with `thinking.type: "enabled"` — only works with providers that support extended thinking (DeepSeek, Claude).
