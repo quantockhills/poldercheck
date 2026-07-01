@@ -107,7 +107,7 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         date_from = f"{years[0]}-01-01"
         date_to = f"{years[0] + 1}-01-01"
     else:
-        date_from = f"{today_year - 1}-01-01"
+        date_from = f"{today_year - 4}-01-01"
         date_to = today_str
 
     # Create year buckets for parallel OData search — always bucket when range > 1 year
@@ -119,7 +119,7 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
     elif years:
         bucket_start = None  # single-year query — no buckets needed
     else:
-        bucket_start = today_year - 1  # no date anchor — default to last 2 years
+        bucket_start = today_year - 4  # no date anchor — default to last 5 years
 
     if bucket_start is not None:
         for y in range(bucket_start, today_year + 1):
