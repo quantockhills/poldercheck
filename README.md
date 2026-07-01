@@ -117,7 +117,7 @@ with "show sources" toggle for full retrieved passages
 
 **The political node** has two retrieval paths:
 
-- **Live parliamentary search** via the OpenTK MCP server (github.com/r-huijts/opentk-mcp). This gives real-time access to Tweede Kamer debates, motions, voting records, and committee proceedings. Before loading full document content, it uses the server's NLP-powered relevance scoring to triage documents, reducing context use substantially. Searches run in parallel per year bucket when the query spans multiple years, so a "since 2020" query searches 2020–2025 concurrently rather than sequentially.
+- **Live parliamentary search** via the Tweede Kamer's OData API (`gegevensmagazijn.tweedekamer.nl`) combined with the OpenTK MCP server (github.com/r-huijts/opentk-mcp). The OData layer searches debate titles using short Dutch root words (e.g. `migratie`, `asiel`) to find relevant Stenogram documents, retrieving the 12 most-recent per year bucket, newest-first. Searches run in parallel per year bucket, so a "since 2020" query covers 2020–2025 concurrently. When the query specifies no date, the default window is the last two years.
 - **Static corpus search** via ChromaDB over text from the Manifesto Project API (party manifesto quasi-sentences, tagged by policy category) and CPB/PBL PDF reports. This is the fallback when OpenTK is unavailable.
 
 **The data node** retrieves CBS statistics without a live API connection. For each query it:
@@ -135,7 +135,7 @@ A **critic agent** is on the roadmap for evaluative questions ("has party X kept
 
 **Context management**
 
-Retrieval is deliberately conservative. Per query: maximum 3 parliamentary documents (pre-triaged by relevance score), maximum 15 static corpus chunks (300–400 tokens each), up to 5 CBS datasets. Each agent only sees its own retrieved context, not the other's. The synthesis node receives structured summaries, not raw contexts.
+Retrieval is deliberately conservative. Per query: up to 12 parliamentary Stenogram documents per year bucket (10 carried into synthesis context), maximum 15 static corpus chunks (300–400 tokens each), up to 5 CBS datasets. Each agent only sees its own retrieved context, not the other's. The synthesis node receives structured summaries, not raw contexts.
 
 **Bring your own model**
 
@@ -238,7 +238,7 @@ Open `http://localhost:8501`. The sidebar has source toggles (Tweede Kamer, mani
 
 **Proof of concept** *(current)*
 
-Four-node LangGraph pipeline working end-to-end: query planner, political analyst (OpenTK live search + static corpus), data analyst (DuckDB parallel workers with sub-topic decomposition), synthesis. Bilingual (EN/NL). Streamlit frontend with show/hide sources and pedagogical mode. Deployed on Hetzner VPS behind nginx with HTTPS and a secret-link token gate. RAGAS evaluation harness in place.
+Four-node LangGraph pipeline working end-to-end: query planner, political analyst (OData + OpenTK live search with year-bucket parallel retrieval + static corpus fallback), data analyst (DuckDB parallel workers with sub-topic decomposition), synthesis. Bilingual (EN/NL). Streamlit frontend with show/hide sources and pedagogical mode. RAGAS evaluation harness in place. Hetzner deployment in progress.
 
 **Public beta**
 
@@ -254,7 +254,7 @@ If the architecture holds, supporting other countries is straightforward: a new 
 
 ## Status
 
-Under active development. Core pipeline working end-to-end; deployment to Hetzner in progress. Not yet publicly accessible.
+Under active development. Core pipeline working end-to-end (political OData search, CBS DuckDB workers, bilingual synthesis). Deployment to Hetzner in progress.
 
 ---
 

@@ -410,12 +410,6 @@ with st.sidebar:
         help="Number of CBS datasets the agent will search and present.",
         disabled=not include_cbs,
     )
-    st.divider()
-    debug = st.checkbox(
-        "Debug mode",
-        value=False,
-        help="Show pipeline trace after each run: OData keywords, per-year doc counts, node timings.",
-    )
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
 tab_search, tab_history = st.tabs(["Search", "History"])
@@ -435,7 +429,7 @@ for _k, _v in [
 
 
 def _search_thread(
-    query, language, mode, pedagogical, include_manifestos, include_tk, include_cbs, cbs_mode, num_datasets, debug, stop_event, msgs, out
+    query, language, mode, pedagogical, include_manifestos, include_tk, include_cbs, cbs_mode, num_datasets, stop_event, msgs, out
 ):
     def _go():
         try:
@@ -455,7 +449,7 @@ def _search_thread(
                     num_datasets=num_datasets,
                     on_status=msgs.append,
                     extra_callbacks=[_CancelCallback(stop_event), cb],
-                    debug=debug,
+                    debug=False,
                 )
             )
             out["elapsed"] = int(_time.time() - _t0)
@@ -495,7 +489,7 @@ with tab_search:
         st.session_state.pop("current_conv_id", None)
         st.session_state.search_thread = _search_thread(
             query, language, mode, pedagogical, include_manifestos, include_tk, include_cbs,
-            cbs_mode, num_datasets, debug, stop_event, msgs, out
+            cbs_mode, num_datasets, stop_event, msgs, out
         )
         st.session_state.app_state = "searching"
         st.rerun()
@@ -559,7 +553,7 @@ with tab_search:
             }
             st.session_state.current_conv_id = save_conversation(st.session_state.last_query, result, settings)
 
-        _render_result(result, language, translations=st.session_state.translations, show_trace=debug)
+        _render_result(result, language, translations=st.session_state.translations)
 
 
 # ── history tab ───────────────────────────────────────────────────────────────
