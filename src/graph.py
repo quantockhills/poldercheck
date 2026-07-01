@@ -72,8 +72,10 @@ async def query_planner_node(state: PolderState) -> dict:
 async def political_node(state: PolderState, config=None) -> dict:
     """Political analyst node: static corpus + live OpenTK parliamentary search."""
     t0 = time.monotonic()
+    on_status = None
     outer_callbacks: list = []
     if config:
+        on_status = (config.get("configurable") or {}).get("on_status")
         outer_callbacks = config.get("callbacks") or []
     try:
         result = await run_political_analyst_v2(
@@ -82,6 +84,7 @@ async def political_node(state: PolderState, config=None) -> dict:
             mode=state.get("mode", "deep"),
             include_manifestos=state.get("include_manifestos", True),
             include_tk=state.get("include_tk", True),
+            on_status=on_status,
             callbacks=outer_callbacks if outer_callbacks else None,
             debug=state.get("debug", False),
         )

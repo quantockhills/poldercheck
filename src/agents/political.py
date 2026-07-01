@@ -89,6 +89,7 @@ async def run_political_analyst_v2(
     mode: str = "deep",
     include_manifestos: bool = True,
     include_tk: bool = True,
+    on_status=None,
     callbacks: list | None = None,
     debug: bool = False,
 ) -> dict:
@@ -129,6 +130,8 @@ async def run_political_analyst_v2(
         config: dict = {}
         if callbacks:
             config["callbacks"] = callbacks
+        if on_status:
+            config.setdefault("configurable", {})["on_status"] = on_status
         result = await graph.ainvoke(initial_state, config=config)
         return {
             "response": result.get("final_response", "No response generated."),

@@ -76,6 +76,9 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
 
     t0 = time.perf_counter()
     debug = state.get("debug", False)
+    on_status = None
+    if config:
+        on_status = (config.get("configurable") or {}).get("on_status")
     query = state["query"]
     include_manifestos = state.get("include_manifestos", False)
 
@@ -186,6 +189,8 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         "static_passages_count": len(static_passages),
         "duration_s": round(time.perf_counter() - t0, 1),
     }
+    if on_status and odata_keywords:
+        on_status(f"TK search terms: *{', '.join(odata_keywords)}*")
     print(f"DEBUG_LOG: plan odata_keywords={odata_keywords!r} dates={date_from}→{date_to} buckets={plan_trace['year_buckets']}")
     if debug:
         print(f"[TRACE] PLAN: {plan_trace}")
@@ -314,6 +319,9 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
     """OData discovery (parallel per year via asyncio.gather) + OpenTK content search."""
     t0 = time.perf_counter()
     debug = state.get("debug", False)
+    on_status = None
+    if config:
+        on_status = (config.get("configurable") or {}).get("on_status")
     search_terms = state.get("search_terms", [])
     date_from_full = state.get("date_from", "2020-01-01")
     date_to_full = state.get("date_to", "2026-01-01")
@@ -347,6 +355,9 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
     # OData discovery — parallel per year if buckets exist
     bucket_counts: dict[str, int] = {}
 
+    if on_status:
+        on_status(f"Searching Tweede Kamer records: *{', '.join(keywords[:5])}*")
+
     if year_buckets and len(year_buckets) > 1:
         async def _bucket_search(b: dict) -> list[dict]:
             try:
@@ -357,6 +368,8 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
                 for r in res:
                     r["year_bucket"] = b["year_label"]
                 bucket_counts[b["year_label"]] = len(res)
+                if on_status:
+                    on_status(f"TK {b['year_label']}: {len(res)} documents")
                 return res
             except Exception:
                 bucket_counts[b["year_label"]] = 0
@@ -381,6 +394,8 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
         candidate_docs: dict[str, dict] = {}
 
         for term in search_terms[:10]:
+            if on_status:
+                on_status(f"Searching debates: *{term[:60]}*")
             try:
                 result = await _mcp_tool(
                     "search_tk_filtered",
@@ -398,6 +413,8 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
                 continue
 
         if candidate_docs:
+            if on_status:
+                on_status(f"Checking relevance: {len(candidate_docs)} documents")
             async def _analyze_tk(did: str):
                 async with sem:
                     data = await _mcp_tool("analyze_document_relevance", {"docId": did, "searchTerms": search_terms[:5]})
