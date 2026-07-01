@@ -20,5 +20,5 @@ httpx
 duckdb
 python-dotenv
 pytest
-ragas
+ragas==0.4.3
 langfuse

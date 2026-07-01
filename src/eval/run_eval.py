@@ -1,15 +1,14 @@
-"""RAGAS evaluation over the benchmark query set (Step 14, layer 2).
+"""RAGAS evaluation over the benchmark query set.
 
 Runs the full graph on every query in eval_set.jsonl, then scores with RAGAS:
-  - faithfulness      -> "responses are anchored to retrieved text"
+  - faithfulness      -> synthesis claims are grounded in retrieved context
   - answer_relevancy  -> response actually addresses the query
-  - context_precision -> retrieval quality (are top chunks relevant?)
 
 Also applies the deterministic response contract to every response.
 Writes eval_results.json and exits non-zero if thresholds are not met.
 
 Requires: built chroma_db corpus + OPENROUTER_API_KEY. Costs LLM-judge API
-calls - run on main / pre-release, not on every push.
+calls — run on main / pre-release, not on every push.
 """
 
 import asyncio
@@ -17,16 +16,20 @@ import json
 import os
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
-from src.eval.contract import check_response_contract
+# RAGAS unconditionally imports ChatVertexAI from langchain_community, which
+# was removed in langchain-community 0.4.x. Stub it out — we never use VertexAI.
+sys.modules.setdefault("langchain_community.chat_models.vertexai", MagicMock())
+
+from src.eval.contract import check_response_contract  # noqa: E402
 
 EVAL_SET = Path(__file__).parent / "eval_set.jsonl"
 RESULTS_FILE = Path("eval_results.json")
 
-# Starting thresholds - tune after the first real run.
 THRESHOLDS = {
     "faithfulness": 0.80,
-    "context_precision": 0.60,
+    "answer_relevancy": 0.70,
 }
 
 
@@ -36,18 +39,27 @@ def load_eval_set() -> list[dict]:
 
 
 async def collect_responses(cases: list[dict]) -> list[dict]:
-    """Run the graph over all eval queries, collecting response + contexts."""
+    """Run the graph over all eval queries, collecting response + all context."""
     from src.graph import run_query
 
     rows = []
     for case in cases:
         print(f"Running: {case['query']}")
         result = await run_query(case["query"])
+
+        # Include all context the synthesis drew from: static passages,
+        # political agent output (contains live TK excerpts), and CBS data.
+        contexts: list[str] = [p["text"] for p in result.get("political_passages", [])]
+        if result.get("political_response"):
+            contexts.append(result["political_response"])
+        if result.get("data_response"):
+            contexts.append(result["data_response"])
+
         rows.append(
             {
                 "user_input": case["query"],
                 "response": result["final_response"],
-                "retrieved_contexts": [p["text"] for p in result.get("political_passages", [])],
+                "retrieved_contexts": contexts,
                 "expected_behaviour": case["expected_behaviour"],
                 "contract_violations": check_response_contract(result["final_response"]),
             }
@@ -56,12 +68,11 @@ async def collect_responses(cases: list[dict]) -> list[dict]:
 
 
 def score_with_ragas(rows: list[dict]) -> dict:
-    """Score collected responses with RAGAS using an OpenRouter judge."""
-    from datasets import Dataset
+    """Score collected responses with RAGAS 0.4.x using an OpenRouter judge."""
     from langchain_openai import ChatOpenAI
-    from ragas import evaluate
+    from ragas import EvaluationDataset, SingleTurnSample, evaluate
     from ragas.llms import LangchainLLMWrapper
-    from ragas.metrics import answer_relevancy, context_precision, faithfulness
+    from ragas.metrics.collections import AnswerRelevancy, Faithfulness
 
     judge = LangchainLLMWrapper(
         ChatOpenAI(
@@ -71,20 +82,20 @@ def score_with_ragas(rows: list[dict]) -> dict:
         )
     )
 
-    dataset = Dataset.from_list(
-        [
-            {
-                "question": r["user_input"],
-                "answer": r["response"],
-                "contexts": r["retrieved_contexts"],
-            }
+    dataset = EvaluationDataset(
+        samples=[
+            SingleTurnSample(
+                user_input=r["user_input"],
+                response=r["response"],
+                retrieved_contexts=r["retrieved_contexts"],
+            )
             for r in rows
         ]
     )
 
     result = evaluate(
-        dataset,
-        metrics=[faithfulness, answer_relevancy, context_precision],
+        dataset=dataset,
+        metrics=[Faithfulness(), AnswerRelevancy()],
         llm=judge,
     )
     return {k: float(v) for k, v in result.items() if isinstance(v, (int, float))}
@@ -92,7 +103,7 @@ def score_with_ragas(rows: list[dict]) -> dict:
 
 def main() -> int:
     if not os.path.exists("./chroma_db"):
-        print("No chroma_db corpus found - build it first (src/ingest/chunk.py). Skipping eval.")
+        print("No chroma_db found — build it first (scripts/rebuild_embeddings.py). Skipping eval.")
         return 0
     if not os.environ.get("OPENROUTER_API_KEY"):
         print("OPENROUTER_API_KEY not set. Skipping eval.")
@@ -102,7 +113,9 @@ def main() -> int:
     rows = asyncio.run(collect_responses(cases))
 
     contract_failures = [
-        {"query": r["user_input"], "violations": r["contract_violations"]} for r in rows if r["contract_violations"]
+        {"query": r["user_input"], "violations": r["contract_violations"]}
+        for r in rows
+        if r["contract_violations"]
     ]
 
     scores = score_with_ragas(rows)

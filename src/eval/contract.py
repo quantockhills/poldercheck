@@ -2,7 +2,7 @@
 
 import re
 
-CITATION_PATTERN = re.compile(r"\[[^\]]+, ?\d{4}\]")
+CITATION_PATTERN = re.compile(r"\^\d+")
 NOT_FOUND_SENTENCE = "I did not find relevant information"
 CBS_NOT_FOUND_SENTENCE = "I could not find a CBS dataset"
 CBS_FAILED_SENTENCE = "The CBS data retrieval process failed"

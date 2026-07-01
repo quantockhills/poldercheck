@@ -66,7 +66,7 @@ A distinction matters here. *Empirical* claims — claims about what the numbers
 
 **Confidence is calibrated.** Where retrieved passages are from a single source or a narrow time window, the response notes this. Where CBS data or CPB analysis is available to corroborate or contradict a political claim, both are shown.
 
-**Responses are concise by design.** The system prompt instructs agents to respond in at most 250 words, cite inline, and use only what is directly relevant to the question. The UI offers a "show sources" toggle: the default view shows the concise cited response; expanding shows the full retrieved passages. This keeps the interface readable while preserving full transparency.
+**Responses are concise by design.** The system prompt instructs agents to respond in at most 300 words, cite inline, and use only what is directly relevant to the question. The UI offers a "show sources" toggle: the default view shows the concise cited response; expanding shows the full retrieved passages. This keeps the interface readable while preserving full transparency.
 
 This connects to a concrete empirical finding worth naming. BullshitBench (github.com/petergpt/bullshit-benchmark) is an open benchmark that tests whether AI models push back on nonsensical or unfounded premises rather than confidently elaborating on them. Across 80+ model variants, most major models (including the latest from Google and OpenAI) accept broken premises more than half the time and use their reasoning capabilities to construct more elaborate justifications for nonsense. Only Anthropic's Claude and Alibaba's Qwen consistently push back. Poldercheck is built on models from this short list, and its retrieval-first architecture reduces the problem further: a model that can only answer from cited sources has fewer opportunities to confabulate.
 
@@ -76,48 +76,66 @@ This is not a solved problem. But it is a more honest approach than the default.
 
 ## Architecture
 
-Poldercheck uses a two-agent architecture built with LangGraph. Political analysis and statistical analysis are genuinely different tasks, and combining them in a single agent produces worse results than having them collaborate.
-
-**The political analyst agent** has two retrieval paths:
-
-- **Live parliamentary search** via the OpenTK MCP server (github.com/r-huijts/opentk-mcp). This gives real-time access to Tweede Kamer debates, motions, voting records, and committee proceedings through 17 specialised tools. Before loading full document content, it uses the server's NLP-powered relevance scoring to triage documents and load only the most relevant ones, reducing context use by up to 90%.
-- **Static corpus search** via ChromaDB and LangChain over text retrieved from the Manifesto Project API (party manifesto quasi-sentences, tagged by policy category) and CPB/PBL PDF reports.
-
-**The data analyst agent** retrieves CBS statistics via the CBS MCP server (github.com/dstotijn/mcp-cbs-cijfers-open-data). Given a query, it searches for relevant datasets by keyword, inspects their dimensions, and retrieves the actual numbers with appropriate filters. It does not rely on pre-loaded data: every CBS query is dynamic and live.
-
-On queries that touch both, LangGraph orchestrates the collaboration: the political analyst retrieves debate framing, party positions, and relevant policy analysis; the data analyst finds what CBS actually shows; and a synthesis node combines them. Disagreements between what politicians claimed and what the data shows are surfaced explicitly.
-
-A third optional node is a **critic agent**, activated for evaluative questions ("has party X kept its promises?", "is this policy working?"). Rather than producing a verdict, it generates two short arguments: one for and one against the proposition, each grounded in retrieved evidence. The critic agent does not conclude. It ends every response with an open question for the user to consider. This is off by default and toggled on in the UI for users who want structured debate framing rather than a synthesis.
+Poldercheck uses a four-node LangGraph pipeline. Political analysis and statistical analysis are genuinely different tasks, and separating them produces better results than combining them in a single agent.
 
 ```
 User query (English or Dutch)
     │
     ▼
-LangGraph router
-    ├── Political analyst agent
-    │       ├── Live search: OpenTK MCP server (Node, via npx)
-    │       │       └── Tweede Kamer debates, motions, voting records
-    │       └── Static search: ChromaDB + LangChain
-    │               └── Manifesto Project API (quasi-sentences, policy codes),
-    │                   CPB Charted Choices PDFs, PBL climate PDFs
-    └── Data analyst agent
-            └── CBS MCP server (Go, runs as local process)
-                    └── CBS StatLine OData API (4000+ datasets)
+query_planner node
+    └── Generates Dutch CBS search term variants (fast mode only)
     │
     ▼
-Synthesis node (LangGraph)
+political node  ── political_discover subgraph ──────────────────────
+    │   plan:    generate 15 Dutch search terms + extract date range   │
+    │   search:  OData discovery (parallel per year bucket)            │
+    │            + OpenTK full-text search (sequential per term)       │
+    │   synth:   merge findings → political analyst response           │
+    │────────────────────────────────────────────────────────────────  │
+    │   Static fallback: ChromaDB over Manifesto Project + CPB/PBL     │
     │
     ▼
-Concise cited response (max 250 words, inline citations)
+data node  ── orchestrator–worker subgraph ──────────────────────────
+    │   discover: decompose query → sub-topics → ChromaDB lookup       │
+    │             per sub-topic → LLM ranks candidates                 │
+    │   workers:  up to 5 parallel agents, one per CBS dataset         │
+    │             download CSV → load DuckDB → SQL exploration         │
+    │   synth:    merge worker findings → data analyst response        │
+    │────────────────────────────────────────────────────────────────  │
+    │
+    ▼
+synthesis node
+    └── Combines political + data responses. Flags where CBS data
+        confirms, contradicts, or cannot speak to political claims.
+    │
+    ▼
+Cited response (max 300 words, ^N inline citations)
 with "show sources" toggle for full retrieved passages
     OR
-"I did not find relevant information in the current corpus.
-Other sources may exist that I do not have access to."
+"I could not find relevant information. Other sources may exist."
 ```
+
+**The political node** has two retrieval paths:
+
+- **Live parliamentary search** via the OpenTK MCP server (github.com/r-huijts/opentk-mcp). This gives real-time access to Tweede Kamer debates, motions, voting records, and committee proceedings. Before loading full document content, it uses the server's NLP-powered relevance scoring to triage documents, reducing context use substantially. Searches run in parallel per year bucket when the query spans multiple years, so a "since 2020" query searches 2020–2025 concurrently rather than sequentially.
+- **Static corpus search** via ChromaDB over text from the Manifesto Project API (party manifesto quasi-sentences, tagged by policy category) and CPB/PBL PDF reports. This is the fallback when OpenTK is unavailable.
+
+**The data node** retrieves CBS statistics without a live API connection. For each query it:
+
+1. **Decomposes** the query into distinct statistical sub-topics (e.g. "housing prices", "social housing stock", "woningvoorraad") in a single LLM call, ensuring each facet of a multi-part question gets its own catalog search rather than all slots filling with datasets from the most-mentioned aspect.
+2. **Searches** the local CBS dataset catalog (ChromaDB index of all 4,000+ dataset titles) once per sub-topic.
+3. **Selects** up to 5 relevant datasets via an LLM judge that prioritises diversity across sub-topics.
+4. **Downloads** each selected dataset as CSV from the CBS OData API and loads it into an in-memory DuckDB instance.
+5. Runs **parallel worker agents** — one per dataset — that explore the data with SQL, extract the numbers relevant to the query, and return a short cited finding.
+6. A final synthesis step combines the worker findings into a single coherent data response.
+
+Every CBS query is dynamic: no data is pre-loaded. The CBS catalog index is updated periodically; the actual statistical observations are always fetched live.
+
+A **critic agent** is on the roadmap for evaluative questions ("has party X kept its promises?", "is this policy working?"). Rather than producing a verdict, it will generate two short arguments — one for and one against the proposition — each grounded in retrieved evidence, ending with an open question for the user. This is not yet active; see [#8](https://github.com/quantockhills/poldercheck/issues/8).
 
 **Context management**
 
-Retrieval is deliberately conservative to prevent both LLM context overwhelm and user-facing information overload. Per query: maximum 3 parliamentary documents (pre-triaged by relevance score), maximum 3 static corpus chunks (300-400 tokens each), maximum 2 CBS datasets. Each agent only sees its own retrieved context, not the other's. The synthesis node receives structured summaries, not raw contexts. These limits are tunable and will be calibrated against real queries during the beta.
+Retrieval is deliberately conservative. Per query: maximum 3 parliamentary documents (pre-triaged by relevance score), maximum 15 static corpus chunks (300–400 tokens each), up to 5 CBS datasets. Each agent only sees its own retrieved context, not the other's. The synthesis node receives structured summaries, not raw contexts.
 
 **Bring your own model**
 
@@ -151,9 +169,9 @@ This is not just about model choice. By default, every query you type is sent to
 - LLM calls: `openai` Python SDK with configurable `base_url`
 - Live parliamentary data: `opentk-mcp` MCP server (Node/TypeScript, via npx)
 - Static corpus: LangChain text splitters + ChromaDB + OpenRouter embeddings (Qwen3-Embedding-8B)
-- CBS data: `mcp-cbs-cijfers-open-data` MCP server (Go, runs as local process)
+- CBS data: DuckDB (in-memory) over CBS OData CSV downloads; ChromaDB catalog index for dataset discovery
 - Frontend: Streamlit (warm pastel design; approachable, not clinical)
-- Deployment: Docker + Azure Container Apps
+- Deployment: Hetzner VPS, nginx reverse proxy, systemd, certbot HTTPS, secret-link token gate
 - CI: GitHub Actions (pytest)
 
 ---
@@ -165,7 +183,7 @@ All sources are free and open.
 | Source | What it covers | Format | How accessed |
 |---|---|---|---|
 | Tweede Kamer debates | Parliamentary proceedings, motions, voting records | Live API | OpenTK MCP server |
-| CBS StatLine | 4000+ statistical datasets (housing, economy, demographics, energy) | Live OData API | CBS MCP server |
+| CBS StatLine | 4000+ statistical datasets (housing, economy, demographics, energy) | CSV via OData API → DuckDB in-memory | Dataset catalog in ChromaDB; CSVs fetched live |
 | Party manifestos | Full quasi-sentence-level coded manifesto text for all major Dutch parties, every election since 1945 | Manifesto Project API (structured, free) | ChromaDB |
 | CPB Charted Choices | Economic scoring of party manifestos, every election since 1986 | PDF (downloaded from cpb.nl) | ChromaDB |
 | PBL climate analysis | Environmental impact of party manifestos, per election | PDF (downloaded from pbl.nl) | ChromaDB |
@@ -174,11 +192,53 @@ All sources are free and open.
 
 ---
 
+## Running locally
+
+**Prerequisites:** Python 3.12+, Node.js 18+ (for the OpenTK MCP server).
+
+```bash
+git clone https://github.com/quantockhills/poldercheck
+cd poldercheck
+python -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+```
+
+**Configure your models.** Copy the block below into a `.env` file in the project root and fill in your API key. Any OpenAI-compatible endpoint works.
+
+```bash
+# Minimal — all three agents share one model
+LLM_BASE_URL=https://openrouter.ai/api/v1
+LLM_API_KEY=sk-or-...
+POLDERCHECK_MODEL=anthropic/claude-sonnet-4-6
+
+# Optional — assign different models per agent
+POLDERCHECK_POLITICAL_MODEL=anthropic/claude-sonnet-4-6
+POLDERCHECK_DATA_MODEL=qwen/qwen3-30b-a3b
+POLDERCHECK_SYNTHESIS_MODEL=anthropic/claude-sonnet-4-6
+```
+
+**Build the local indexes.** This runs once and populates the ChromaDB catalog used for CBS dataset discovery and the static political corpus.
+
+```bash
+python scripts/build_cbs_catalog.py      # indexes 4000+ CBS dataset titles
+python scripts/rebuild_embeddings.py     # embeds manifesto + CPB/PBL text
+```
+
+**Run:**
+
+```bash
+streamlit run src/app.py
+```
+
+Open `http://localhost:8501`. The sidebar has source toggles (Tweede Kamer, manifestos, CBS data) and a pedagogical mode that explains Dutch policy jargon inline.
+
+---
+
 ## Development roadmap
 
-**Proof of concept**
+**Proof of concept** *(current)*
 
-Single political analyst agent with both retrieval paths working (OpenTK MCP for live debates, ChromaDB for a small static corpus: 2025 party manifestos and the most recent CPB/PBL analysis). Data analyst agent with CBS MCP. Streamlit frontend with show/hide sources toggle. Conservative retrieval limits. Explicit "not found" responses. Deployed on Azure Container Apps.
+Four-node LangGraph pipeline working end-to-end: query planner, political analyst (OpenTK live search + static corpus), data analyst (DuckDB parallel workers with sub-topic decomposition), synthesis. Bilingual (EN/NL). Streamlit frontend with show/hide sources and pedagogical mode. Deployed on Hetzner VPS behind nginx with HTTPS and a secret-link token gate. RAGAS evaluation harness in place.
 
 **Public beta**
 
@@ -194,7 +254,7 @@ If the architecture holds, supporting other countries is straightforward: a new 
 
 ## Status
 
-Under active development. Proof of concept in progress.
+Under active development. Core pipeline working end-to-end; deployment to Hetzner in progress. Not yet publicly accessible.
 
 ---
 

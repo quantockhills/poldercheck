@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import re
 import threading
 import time
@@ -277,10 +278,14 @@ def _render_result(result: dict, display_language: str, translations: dict | Non
 # ── page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Poldercheck", page_icon="🌊", layout="wide")
 
+_TOKEN = os.environ.get("ACCESS_TOKEN", "")
+if _TOKEN and st.query_params.get("token") != _TOKEN:
+    st.stop()
+
 st.markdown(
     """
 <style>
-    .stApp { background-color: #f8f4f0; }
+    .stApp { background-color: #f8f4f0; color: #1a1a2e; }
     .party-passage {
         border-radius: 8px;
         padding: 0.75rem 1rem;
@@ -298,12 +303,50 @@ st.markdown(
         padding: 0.75rem 1rem;
         margin-top: 0.5rem;
     }
+    * { border-radius: 0 !important; }
+
+    /* Grey out last radio option in Mode and CBS query mode radios */
+    div[data-testid="stRadio"] div[role="radiogroup"] label:last-of-type {
+        opacity: 0.38 !important;
+        pointer-events: none !important;
+        cursor: not-allowed !important;
+    }
+    div[data-testid="stRadio"] div[role="radiogroup"] label:last-of-type input {
+        pointer-events: none !important;
+    }
+    /* Exception: Language radio (first stRadio) — "English (EN)" is a real option, not coming soon */
+    section[data-testid="stSidebar"] div[data-testid="stRadio"]:first-of-type div[role="radiogroup"] label:last-of-type {
+        opacity: 1 !important;
+        pointer-events: auto !important;
+        cursor: pointer !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stRadio"]:first-of-type div[role="radiogroup"] label:last-of-type input {
+        pointer-events: auto !important;
+    }
+
+    /* Search button — glassy grey, black text */
+    div[data-testid="stButton"] button,
+    button[data-testid="baseButton-primary"],
+    button[data-testid="baseButton-secondary"] {
+        background: rgba(200, 200, 200, 0.45) !important;
+        backdrop-filter: blur(8px) !important;
+        -webkit-backdrop-filter: blur(8px) !important;
+        border: 1px solid rgba(160, 160, 160, 0.5) !important;
+        color: #1a1a2e !important;
+        box-shadow: none !important;
+    }
+    div[data-testid="stButton"] button:hover,
+    button[data-testid="baseButton-primary"]:hover {
+        background: rgba(180, 180, 180, 0.6) !important;
+        color: #1a1a2e !important;
+        border: 1px solid rgba(140, 140, 140, 0.6) !important;
+    }
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-st.markdown("## Poldercheck 🌊")
+st.markdown("<h1 style='text-align:center'>POLDERCHECK</h1>", unsafe_allow_html=True)
 st.caption("Connecting Dutch politics and policy to data, in a way anyone can understand.")
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -327,9 +370,11 @@ with st.sidebar:
     st.caption("National-level politics only. Not a stemhulp.")
     st.divider()
     language = "en" if st.radio("Language", ["Dutch (NL)", "English (EN)"]) == "English (EN)" else "nl"
-    mode = "fast" if st.radio("Mode", ["Deep (thorough)", "Fast"]) == "Fast" else "deep"
+    st.radio("Mode", ["Deep (thorough)", "Fast (coming soon)"], index=0)
+    mode = "deep"
     pedagogical = st.checkbox(
         "Pedagogical mode",
+        value=True,
         help="Explains Dutch terms, abbreviations, and policy names inline.",
     )
     st.divider()
@@ -343,14 +388,14 @@ with st.sidebar:
     include_cbs = st.checkbox(
         "CBS statistical data", value=True, help="Fetch CBS StatLine data to support or challenge political claims.",
     )
-    cbs_mode = st.radio(
+    st.radio(
         "CBS query mode",
-        ["MCP", "DuckDB (local SQL)"],
+        ["DuckDB (local SQL)", "MCP (coming soon)"],
         index=0,
         disabled=not include_cbs,
-        help="MCP: live queries via CBS API. DuckDB: download CSV and query with SQL (faster, more reliable).",
+        help="DuckDB: download CSV and query with SQL (faster, more reliable).",
     )
-    cbs_mode = "duckdb" if cbs_mode == "DuckDB (local SQL)" else "mcp"
+    cbs_mode = "duckdb"
     num_datasets = st.number_input(
         "CBS datasets to query",
         min_value=1, max_value=10, value=3,
@@ -414,9 +459,10 @@ def _search_thread(
 # ── search tab ────────────────────────────────────────────────────────────────
 with tab_search:
     with st.form("search_form", clear_on_submit=False):
-        query = st.text_input(
+        query = st.text_area(
             "Ask a question about Dutch politics or policy",
             placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
+            height=120,
         )
         submitted = st.form_submit_button("Search", type="primary", use_container_width=True)
 

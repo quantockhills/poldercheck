@@ -19,7 +19,7 @@ from langchain_openai import ChatOpenAI
 from src.agents.config import AGENT_CONFIGS
 from src.ingest.retrieve import retrieve_cbs_datasets
 
-_duck: "duckdb.DuckDBPyConnection | None" = None
+_duck: object = None  # duckdb.DuckDBPyConnection when initialised
 _duck_gen: int = 0  # incremented each _run_duckdb_parallel to isolate runs
 
 
@@ -351,9 +351,9 @@ def download_cbs_dataset(dataset_id: str) -> str:
     After downloading, query tables like {dataset_id}_Observations, {dataset_id}_MeasureCodes.
     Always join with MeasureCodes to get readable measure labels.
     """
-    import duckdb
-    import requests
     import zipfile
+
+    import requests
     duck = _get_duck()
     try:
         resp = requests.get(
@@ -387,7 +387,6 @@ def run_sql(sql: str) -> str:
     like "85773NED_Observations". Join with MeasureCodes to get labels.
     Always use LIMIT to avoid flooding the context with large results.
     """
-    import duckdb
     duck = _get_duck()
     try:
         result = duck.execute(sql).fetchdf()
@@ -409,11 +408,12 @@ async def _run_duckdb_parallel(
     callbacks: list | None = None,
 ) -> str:
     """Orchestrator–worker graph: fan out to N parallel DuckDB agents, one per dataset."""
-    from typing import Annotated
     import operator
-    from langgraph.graph import StateGraph, START, END
-    from langgraph.types import Send
+    from typing import Annotated
+
+    from langgraph.graph import END, START, StateGraph
     from langgraph.prebuilt import create_react_agent
+    from langgraph.types import Send
     from typing_extensions import TypedDict
 
     _reset_duck()  # prevent stale data from previous runs
@@ -452,79 +452,59 @@ async def _run_duckdb_parallel(
     )
 
     async def discover_node(state: OrchestratorState) -> dict:
-        seen_terms: set[str] = set()
-        candidates: dict[str, str] = {}  # id -> title (found but not yet judged)
-        relevant: dict[str, str] = {}  # id -> title (judged relevant)
-
-        async def _eval() -> None:
-            if not candidates:
-                return
-            prompt = (
+        # Step 1: decompose query into distinct CBS statistical sub-topics
+        decompose_resp = await llm.ainvoke([{
+            "role": "user",
+            "content": (
                 f"Query: {query}\n\n"
-                f"Dataset titles:\n" +
-                "\n".join(f"  {k}: {v}" for k, v in candidates.items()) +
-                "\n\nWhich of these CBS datasets are genuinely relevant to the query? "
-                "Return only the relevant IDs, one per line, nothing else. "
-                "If none are relevant, return 'NONE'."
-            )
-            judge = await llm.bind(extra_body={
-                "thinking": {"type": "enabled", "effort": "medium"},
-            }).ainvoke([{"role": "user", "content": prompt}])
-            for token in judge.content.strip().split():
-                tid = token.strip(",. \n")
-                if tid in candidates:
-                    relevant[tid] = candidates[tid]
-            candidates.clear()
+                "Identify 3-5 distinct CBS statistical sub-topics in this query. "
+                "Each should be a short Dutch phrase suitable as a CBS StatLine search term. "
+                "Cover different measurable phenomena — e.g. for a housing query: "
+                "'koopwoningprijzen', 'woningcorporaties sociale huur', 'woningvoorraad beschikbaarheid'. "
+                "Return one term per line, nothing else."
+            ),
+        }])
+        sub_topics = [t.strip() for t in decompose_resp.content.strip().split("\n") if t.strip()]
+        print(f"DEBUG_LOG: discover sub-topics={sub_topics!r}")
 
-        for attempt in range(25):
-            # Generate new search terms
-            search = await llm.bind(extra_body={
-                "thinking": {"type": "enabled", "effort": "medium"},
-            }).ainvoke([
-                {"role": "user", "content": (
-                    f"Query: {query}\n"
-                    f"Already searched terms: {', '.join(seen_terms) or 'none'}\n"
-                    f"Already found datasets: {', '.join(relevant.values()) or 'none'}\n\n"
-                    f"Iteration {attempt + 1}. Generate 3 Dutch CBS search terms "
-                    "that might find datasets relevant to the query. "
-                    "Return one per line, nothing else."
-                )}
-            ])
-            try:
-                raw = search.content.strip()
-                new_terms = [t.strip() for t in raw.split("\n") if t.strip() and t.strip() not in seen_terms]
-            except Exception:
-                new_terms = []
-
-            if not new_terms:
-                break
-
+        # Step 2: one ChromaDB search per sub-topic so every facet gets coverage
+        seen_ids: set[str] = set()
+        candidates: dict[str, str] = {}
+        for topic in sub_topics:
             if on_status:
-                on_status(f"CBS search: *{', '.join(new_terms)}*")
-
-            seen_terms.update(new_terms)
-            for c in retrieve_cbs_datasets(list(new_terms), n_results=5):
-                if c["identifier"] not in relevant and c["identifier"] not in candidates:
+                on_status(f"CBS search: *{topic}*")
+            for c in retrieve_cbs_datasets([topic], n_results=5):
+                if c["identifier"] not in seen_ids:
                     candidates[c["identifier"]] = c["title"]
+                    seen_ids.add(c["identifier"])
 
-            # Every few iterations, judge candidate relevance
-            if candidates and (len(relevant) < num_datasets and attempt % 2 == 0):
-                await _eval()
+        print(f"DEBUG_LOG: discover candidates={list(candidates.keys())!r}")
 
-            if on_status and candidates:
-                on_status(f"  found: *{'; '.join(candidates.keys())}*")
-            if on_status and relevant:
-                on_status(f"  relevant: *{'; '.join(f'{k}: {v[:40]}' for k, v in relevant.items())}*")
+        if not candidates:
+            return {"dataset_ids": []}
 
-            if len(relevant) >= num_datasets:
-                break
+        # Step 3: rank candidates and select the best num_datasets
+        judge_resp = await llm.ainvoke([{
+            "role": "user",
+            "content": (
+                f"Query: {query}\n\n"
+                "Dataset titles:\n" +
+                "\n".join(f"  {k}: {v}" for k, v in candidates.items()) +
+                f"\n\nRank the most relevant CBS datasets for this query. "
+                f"Select the best {num_datasets} (or fewer if less are relevant), "
+                "prioritising diversity across sub-topics. "
+                "Return only the IDs, one per line, most relevant first. "
+                "If none are relevant, return 'NONE'."
+            ),
+        }])
+        selected = []
+        for token in judge_resp.content.strip().split():
+            tid = token.strip(",. \n")
+            if tid in candidates and tid not in selected:
+                selected.append(tid)
 
-        # Final evaluation of remaining candidates
-        if candidates and len(relevant) < num_datasets:
-            await _eval()
-
-        print(f"DEBUG_LOG: discovered {len(relevant)} relevant datasets: {list(relevant.keys())}")
-        return {"dataset_ids": list(relevant.keys())[:num_datasets]}
+        print(f"DEBUG_LOG: discovered {len(selected)} relevant datasets: {selected!r}")
+        return {"dataset_ids": selected[:num_datasets]}
 
     def fanout(state: OrchestratorState) -> list[Send]:
         if not state["dataset_ids"]:
@@ -676,8 +656,8 @@ async def run_data_analyst(
     cbs_queries: list[str] | None = None,
     political_context: str | None = None,
     mode: str = "deep",
-    num_datasets: int = 3,
-    cbs_mode: str = "mcp",
+    num_datasets: int = 5,
+    cbs_mode: str = "duckdb",
     on_status=None,
     callbacks: list | None = None,
 ) -> str:

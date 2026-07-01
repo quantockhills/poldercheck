@@ -9,7 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from openai import OpenAI
 
 from src.agents.config import AGENT_CONFIGS
-from src.agents.data import CBS_NOT_FOUND, CBS_PROCESS_FAILED, run_data_analyst
+from src.agents.data import CBS_PROCESS_FAILED, run_data_analyst
 from src.agents.political import run_political_analyst_v2
 
 DATA_NODE_TIMEOUT_FAST_S = 300
@@ -121,8 +121,8 @@ async def data_node(state: PolderState, config=None) -> dict:
                 cbs_queries=state.get("cbs_queries", []) + extra,
                 political_context=political if political else None,
                 mode=mode,
-                num_datasets=state.get("num_datasets", 3),
-                cbs_mode=state.get("cbs_mode", "mcp"),
+                num_datasets=state.get("num_datasets", 5),
+                cbs_mode=state.get("cbs_mode", "duckdb"),
                 on_status=on_status,
                 callbacks=outer_callbacks,
             ),
@@ -263,8 +263,8 @@ async def run_query(
     include_manifestos: bool = True,
     include_tk: bool = True,
     include_cbs: bool = True,
-    cbs_mode: str = "mcp",
-    num_datasets: int = 3,
+    cbs_mode: str = "duckdb",
+    num_datasets: int = 5,
     extra_callbacks: list | None = None,
     on_status=None,
 ) -> dict:

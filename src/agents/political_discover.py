@@ -4,11 +4,15 @@ Replaces the hand-rolled _run_discover loop in political.py with a proper LangGr
 subgraph for automatic tracing, state management, and future Send-based fan-out.
 """
 
-import asyncio, json, re, subprocess
+import asyncio
+import json
+import re
+import subprocess
 from typing import TypedDict
 from urllib.parse import quote
 
 import httpx
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 
 from src.agents.config import AGENT_CONFIGS
@@ -17,7 +21,6 @@ from src.ingest.retrieve import format_for_prompt, retrieve_static
 _ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
 _MCP_BIN: str = ""
 
-MAX_TERM_ITERATIONS = 6
 ODATA_PARTY_EXCERPTS = 10
 MAX_ODATA_DOCS_PER_YEAR = 8
 MCP_PARALLEL = 8
@@ -44,6 +47,7 @@ class PoliticalDiscoverState(TypedDict):
     include_tk: bool
     # Plan outputs
     search_terms: list[str]
+    odata_keywords: list[str]  # short Dutch root words for OData Onderwerp substring search
     date_from: str
     date_to: str
     static_passages: list[dict]
@@ -60,17 +64,32 @@ class PoliticalDiscoverState(TypedDict):
 # 1. Plan node — generate terms, detect date range, search static corpus
 # ---------------------------------------------------------------------------
 
-async def _plan_node(state: PoliticalDiscoverState, config: "RunnableConfig | None" = None) -> dict:  # type: ignore[name-defined]
+async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
     """Generate Dutch search terms from the query, extract date range, search static corpus."""
     from langchain_openai import ChatOpenAI
 
     query = state["query"]
     include_manifestos = state.get("include_manifestos", False)
-    language = state.get("language", "nl")
 
     # Extract date range from query
+    from datetime import date as _date
+    today = _date.today()
+    today_str = today.strftime("%Y-%m-%d")
+    today_year = today.year
+
     years = sorted(set(int(y) for y in re.findall(r"\b(20[0-9]{2})\b", query) if 2000 <= int(y) <= 2030))
-    if len(years) >= 2:
+
+    # Detect open-ended "since X" / "vanaf X" / "sindsX" anchors — date_to = today
+    _since_pat = re.compile(
+        r"\b(?:since|vanaf|sinds|na|after|from)\s+(20[0-9]{2})\b", re.IGNORECASE
+    )
+    _since_match = _since_pat.search(query)
+
+    if _since_match:
+        anchor = int(_since_match.group(1))
+        date_from = f"{anchor}-01-01"
+        date_to = today_str
+    elif len(years) >= 2:
         date_from = f"{years[0]}-01-01"
         date_to = f"{years[-1]}-12-31"
     elif years:
@@ -78,11 +97,18 @@ async def _plan_node(state: PoliticalDiscoverState, config: "RunnableConfig | No
         date_to = f"{years[0] + 1}-01-01"
     else:
         date_from = "2020-01-01"
-        date_to = "2026-01-01"
+        date_to = today_str
 
-    # Create year buckets if range spans > 2 years (agent decided)
+    # Create year buckets for multi-year ranges (parallel OData search per year)
     year_buckets: list[dict] = []
-    if len(years) >= 2:
+    if _since_match:
+        for y in range(anchor, today_year + 1):
+            year_buckets.append({
+                "date_from": f"{y}-01-01",
+                "date_to": f"{y}-12-31",
+                "year_label": str(y),
+            })
+    elif len(years) >= 2:
         unique_years = sorted(set(years))
         if len(unique_years) > 2:
             for y in unique_years:
@@ -98,27 +124,40 @@ async def _plan_node(state: PoliticalDiscoverState, config: "RunnableConfig | No
         base_url=cfg["base_url"],
         api_key=cfg["api_key"],
         model=cfg["model"],
-        max_tokens=200,
+        max_tokens=300,
         timeout=30,
         max_retries=1,
     )
 
-    # Generate search terms (up to MAX_TERM_ITERATIONS rounds)
-    seen_terms: set[str] = set()
-    for attempt in range(MAX_TERM_ITERATIONS):
-        term_prompt = (
-            f"Query: {query}\n"
-            f"Already searched: {', '.join(sorted(seen_terms)) or 'none'}\n"
-            f"Iteration {attempt + 1}. Generate 3 Dutch search terms for finding "
-            "parliamentary debates relevant to this query. "
-            "Return one per line, nothing else."
-        )
-        resp = await llm.ainvoke([{"role": "user", "content": term_prompt}])
-        raw = resp.content.strip()
-        new_terms = [t.strip() for t in raw.split("\n") if t.strip() and t.strip() not in seen_terms]
-        if not new_terms:
-            break
-        seen_terms.update(new_terms)
+    # Generate search terms + OData root keywords in one call
+    term_prompt = (
+        f"Query: {query}\n\n"
+        "Part 1: Generate 15 diverse Dutch search terms for finding parliamentary debates "
+        "relevant to this query. Cover different angles and phrasings. "
+        "Return one term per line.\n\n"
+        "Then output exactly: ---\n\n"
+        "Part 2: List 3-5 short Dutch root words (4-9 characters) that would appear in "
+        "the TITLE of a Tweede Kamer debate about this topic. These are used for substring "
+        "title search — pick the broadest roots that cover all related debate titles. "
+        "Example: for a housing query: huur, woning, koop. "
+        "For a migration query: migratie, asiel, vreemdelingen. "
+        "Return one word per line, nothing else."
+    )
+    resp = await llm.ainvoke([{"role": "user", "content": term_prompt}])
+    raw = resp.content.strip()
+
+    # Split on the --- separator
+    if "---" in raw:
+        terms_block, kw_block = raw.split("---", 1)
+    else:
+        terms_block, kw_block = raw, ""
+
+    seen_terms = {t.strip() for t in terms_block.strip().split("\n") if t.strip()}
+    odata_keywords = [
+        w.strip().lower() for w in kw_block.strip().split("\n")
+        if w.strip() and w.strip().isalpha() and 4 <= len(w.strip()) <= 9
+    ][:5]
+    print(f"DEBUG_LOG: plan odata_keywords={odata_keywords!r}")
 
     # Search static corpus
     static_passages: list = []
@@ -130,6 +169,7 @@ async def _plan_node(state: PoliticalDiscoverState, config: "RunnableConfig | No
 
     return {
         "search_terms": sorted(seen_terms),
+        "odata_keywords": odata_keywords,
         "date_from": date_from,
         "date_to": date_to,
         "year_buckets": year_buckets,
@@ -175,7 +215,7 @@ async def _discover_odata_inner(
     excerpt_docs: int = 10,
 ) -> list[dict]:
     """Run the full OData → analyze → party excerpts pipeline."""
-    kw_filter = " or ".join(f"contains(Onderwerp,'{k}')" for k in keywords[:5])
+    kw_filter = " or ".join(f"contains(tolower(Onderwerp),'{k}')" for k in keywords[:5])
     parts = [
         "Verwijderd eq false",
         f"Datum ge {date_from}",
@@ -206,13 +246,11 @@ async def _discover_odata_inner(
                     "parties": data.get("entities", {}).get("parties", []),
                     "chars": data.get("statistics", {}).get("characterCount", 0) or 0,
                 }
-            return {"score": -1, "parties": [], "chars": 0}
+            return {"score": 0, "parties": [], "chars": 0}
 
     results: list[dict] = []
     tasks = [_analyze(d["DocumentNummer"]) for d in docs]
     for d, analysis in zip(docs, await asyncio.gather(*tasks)):
-        if analysis["score"] < 0:
-            continue
         results.append(
             {
                 "doc_id": d["DocumentNummer"],
@@ -248,20 +286,36 @@ async def _discover_odata_inner(
     return results
 
 
-async def _search_node(state: PoliticalDiscoverState, config: "RunnableConfig | None" = None) -> dict:  # type: ignore[name-defined]
+async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
     """OData discovery (parallel per year via asyncio.gather) + OpenTK content search."""
-    query = state["query"]
     search_terms = state.get("search_terms", [])
     date_from_full = state.get("date_from", "2020-01-01")
     date_to_full = state.get("date_to", "2026-01-01")
     include_tk = state.get("include_tk", False)
     year_buckets = state.get("year_buckets", [])
 
-    # Build single-word keywords from search terms
-    keywords = list(dict.fromkeys(
-        w for t in search_terms[:10] for w in t.lower().split()
-        if len(w) >= 3 and w.isalpha()
-    ))[:8]
+    # Use explicit OData root keywords from plan node if available;
+    # fall back to word-splitting heuristic on search terms.
+    odata_keywords = state.get("odata_keywords", [])
+    if odata_keywords:
+        keywords = odata_keywords[:8]
+        print(f"DEBUG_LOG: search using plan odata_keywords={keywords!r}")
+    else:
+        _STOP = {
+            "tweede", "kamer", "debat", "politieke", "standpunten", "verandering",
+            "naar", "voor", "over", "van", "met", "een", "het", "der", "dat",
+            "die", "dit", "wat", "wie", "hoe", "als", "ook", "zijn", "heeft",
+            "worden", "wordt", "maar", "door", "bij", "aan", "uit", "niet",
+            "meer", "dan", "nog", "wel", "zonder", "tussen", "jaren", "jaar",
+            "partij", "partijen", "parlement", "parlementair", "standpunt",
+            "beleid", "politiek", "nederland", "nederlands", "nederlandse",
+            "dutch", "since", "changed", "change", "view", "views", "how",
+        }
+        keywords = list(dict.fromkeys(
+            w for t in search_terms[:10] for w in t.lower().split()
+            if len(w) >= 5 and w.isalpha() and w not in _STOP
+        ))[:8]
+        print(f"DEBUG_LOG: search using fallback keywords={keywords!r}")
 
     # OData discovery — parallel per year if buckets exist
     if year_buckets and len(year_buckets) > 1:
@@ -344,10 +398,10 @@ async def _search_node(state: PoliticalDiscoverState, config: "RunnableConfig | 
 # 3. Synthesize node — merge findings, get excerpts, LLM synthesis
 # ---------------------------------------------------------------------------
 
-async def _synthesize_node(state: PoliticalDiscoverState, config: "RunnableConfig | None" = None) -> dict:  # type: ignore[name-defined]
+async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
     """Merge OData and OpenTK results, format for synthesis, call LLM."""
+
     from langchain_openai import ChatOpenAI
-    from pathlib import Path
 
     query = state["query"]
     language = state.get("language", "nl")
@@ -361,7 +415,7 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: "RunnableConfi
         api_key=cfg["api_key"],
         model=cfg["model"],
         max_tokens=cfg["max_tokens"],
-        timeout=60,
+        timeout=120,
         max_retries=1,
     )
 
