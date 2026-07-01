@@ -180,6 +180,23 @@ def _render_source_nums(text: str) -> str:
     return _linkify_ids(text)
 
 
+def _sources_to_html(text: str) -> str:
+    """Convert the ## Sources markdown block to HTML for embedding inside a styled div."""
+    lines = _linkify_ids(text).split("\n")
+    parts = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            continue
+        if re.match(r"^#{1,3}\s+", s):
+            heading = re.sub(r"^#{1,3}\s+", "", s)
+            parts.append(f"<p style='margin:0 0 0.4rem 0;font-weight:600'>{heading}</p>")
+        else:
+            s = re.sub(r"\^(\d+)", r"<sup>\1</sup>", s)
+            parts.append(f"<p style='margin:0.15rem 0'>{s}</p>")
+    return "\n".join(parts)
+
+
 def _translate(text: str, target_lang: str) -> str:
     from openai import OpenAI
 
@@ -238,7 +255,7 @@ def _render_result(result: dict, display_language: str, translations: dict | Non
 
     if sources_text:
         st.markdown(
-            f'<div class="source-footer">{_render_source_nums(sources_text)}</div>',
+            f'<div class="source-footer">{_sources_to_html(sources_text)}</div>',
             unsafe_allow_html=True,
         )
 
