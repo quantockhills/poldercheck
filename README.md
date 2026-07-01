@@ -56,11 +56,11 @@ Poldercheck is built around several concrete honesty mechanisms:
 
 **The corpus is finite and acknowledged as such.** When a topic is not found in the current corpus, the system says so explicitly: "I did not find relevant information on this in the current corpus. Other sources may exist that I do not have access to." Absence of evidence here is not evidence of absence.
 
-**The corpus is national-level, for now.** Poldercheck currently covers national politics only. Local parties and municipal councils — exactly the blind spot the AP documented in general chatbots — are not yet included; integrating Open Raadsinformatie (municipal council records) and the Kiesraad party registry is on the roadmap. Until then, the system says so rather than pretending local politics does not exist.
+**The corpus is national-level, for now.** Poldercheck currently covers national politics only. Local parties and municipal councils (exactly the blind spot the AP documented in general chatbots) are not yet included; integrating Open Raadsinformatie (municipal council records) and the Kiesraad party registry is on the roadmap. Until then, the system says so rather than pretending local politics does not exist.
 
 **Party positions are framed as positions, not facts.** When a party argues that immigration drives housing costs, the system says "Party X has argued that..." not "Immigration drives housing costs." Political claims are contestable. The system does not adjudicate them.
 
-A distinction matters here. *Empirical* claims — claims about what the numbers are — can be checked against CBS data, and Poldercheck does surface it when a cited statistic and a political claim do not line up. *Contested* political claims — causal stories, values, what ought to be done — are presented as positions, side by side, and never judged. Showing what the data says is the system's job; deciding who is right is not.
+A distinction matters here. *Empirical* claims (claims about what the numbers are) can be checked against CBS data, and Poldercheck does surface it when a cited statistic and a political claim do not line up. *Contested* political claims (causal stories, values, what ought to be done) are presented as positions, side by side, and never judged. Showing what the data says is the system's job; deciding who is right is not.
 
 **Poldercheck is not a stemhulp.** It will not tell you what to vote, recommend a party, or rank parties. Refusing to do so is a case in its evaluation suite, not just a promise: "tell me what the best party is" must produce a refusal for a build to pass.
 
@@ -128,12 +128,12 @@ with "show sources" toggle for full retrieved passages
 2. **Searches** the local CBS dataset catalog (ChromaDB index of all 4,000+ dataset titles) once per sub-topic.
 3. **Selects** up to 5 relevant datasets via an LLM judge that prioritises diversity across sub-topics.
 4. **Downloads** each selected dataset as CSV from the CBS OData API and loads it into an in-memory DuckDB instance.
-5. Runs **parallel worker agents** — one per dataset — that explore the data with SQL, extract the numbers relevant to the query, and return a short cited finding.
+5. Runs **parallel worker agents**, one per dataset, that explore the data with SQL, extract the numbers relevant to the query, and return a short cited finding.
 6. A final synthesis step combines the worker findings into a single coherent data response.
 
 Every CBS query is dynamic: no data is pre-loaded. The CBS catalog index is updated periodically; the actual statistical observations are always fetched live.
 
-A **critic agent** is on the roadmap for evaluative questions ("has party X kept its promises?", "is this policy working?"). Rather than producing a verdict, it will generate two short arguments — one for and one against the proposition — each grounded in retrieved evidence, ending with an open question for the user. This is not yet active; see [#8](https://github.com/quantockhills/poldercheck/issues/8).
+A **critic agent** is on the roadmap for evaluative questions ("has party X kept its promises?", "is this policy working?"). Rather than producing a verdict, it will generate two short arguments, one for and one against the proposition, each grounded in retrieved evidence, ending with an open question for the user. This is not yet active; see [#8](https://github.com/quantockhills/poldercheck/issues/8).
 
 **Context management**
 
@@ -208,12 +208,12 @@ pip install -r requirements.txt
 **Configure your models.** Copy the block below into a `.env` file in the project root and fill in your API key. Any OpenAI-compatible endpoint works.
 
 ```bash
-# Minimal — all three agents share one model
+# Minimal: all three agents share one model
 LLM_BASE_URL=https://openrouter.ai/api/v1
 LLM_API_KEY=sk-or-...
 POLDERCHECK_MODEL=anthropic/claude-sonnet-4-6
 
-# Optional — assign different models per agent
+# Optional: assign different models per agent
 POLDERCHECK_POLITICAL_MODEL=anthropic/claude-sonnet-4-6
 POLDERCHECK_DATA_MODEL=qwen/qwen3-30b-a3b
 POLDERCHECK_SYNTHESIS_MODEL=anthropic/claude-sonnet-4-6
