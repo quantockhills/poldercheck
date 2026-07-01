@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import re
@@ -290,95 +291,135 @@ _TOKEN = os.environ.get("ACCESS_TOKEN", "")
 if _TOKEN and st.query_params.get("token") != _TOKEN:
     st.stop()
 
+_BG_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "bg.jpg")
+try:
+    with open(_BG_PATH, "rb") as _f:
+        _BG_B64 = base64.b64encode(_f.read()).decode()
+    _BG_CSS = f"url('data:image/jpeg;base64,{_BG_B64}')"
+except FileNotFoundError:
+    _BG_CSS = "none"
+
 st.markdown(
-    """
+    f"""
 <style>
-    .stApp { background-color: #f8f4f0; color: #1a1a2e; }
-    .party-passage {
+    .stApp {{
+        background-image: {_BG_CSS};
+        background-size: cover;
+        background-position: center;
+        background-attachment: fixed;
+        color: #1a1a2e;
+    }}
+    .party-passage {{
         border-radius: 8px;
         padding: 0.75rem 1rem;
         margin: 0.5rem 0;
         font-size: 0.9rem;
-        background-color: #ffffff;
+        background-color: rgba(255,255,255,0.88);
         color: #1a1a2e;
-    }
-    .party-passage * { color: #1a1a2e; }
-    .source-footer {
+    }}
+    .party-passage * {{ color: #1a1a2e; }}
+    .source-footer {{
         font-size: 0.85rem;
         color: #2d3748;
-        background-color: #f0f4f8;
+        background-color: rgba(240,244,248,0.88);
         border-radius: 8px;
         padding: 0.75rem 1rem;
         margin-top: 0.5rem;
-    }
-    * { border-radius: 0 !important; }
+    }}
+    * {{ border-radius: 0 !important; }}
 
-    /* Grey out last radio option in Mode and CBS query mode radios */
-    div[data-testid="stRadio"] div[role="radiogroup"] label:last-of-type {
-        opacity: 0.38 !important;
-        pointer-events: none !important;
-        cursor: not-allowed !important;
-    }
-    div[data-testid="stRadio"] div[role="radiogroup"] label:last-of-type input {
-        pointer-events: none !important;
-    }
-    /* Exception: Language radio (first stRadio) — "English (EN)" is a real option, not coming soon */
-    section[data-testid="stSidebar"] div[data-testid="stRadio"]:first-of-type div[role="radiogroup"] label:last-of-type {
-        opacity: 1 !important;
-        pointer-events: auto !important;
-        cursor: pointer !important;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stRadio"]:first-of-type div[role="radiogroup"] label:last-of-type input {
-        pointer-events: auto !important;
-    }
+    /* Sidebar */
+    section[data-testid="stSidebar"],
+    section[data-testid="stSidebar"] > div,
+    section[data-testid="stSidebar"] > div:first-child {{
+        background-color: rgba(248, 244, 240, 0.90) !important;
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
+        color: #1a1a2e !important;
+    }}
+
+    /* Reusable frosted box for individual text elements */
+    .pc-box {{
+        display: inline-block;
+        background-color: rgba(248, 244, 240, 0.88);
+        backdrop-filter: blur(6px);
+        -webkit-backdrop-filter: blur(6px);
+        padding: 0.35rem 1rem;
+        color: #1a1a2e;
+    }}
+
+    /* Equal-width tabs */
+    div[data-testid="stTabs"] div[role="tablist"] {{
+        display: flex !important;
+    }}
+    div[data-testid="stTabs"] div[role="tablist"] button[role="tab"] {{
+        flex: 1 !important;
+        justify-content: center !important;
+    }}
+
+    /* Frosted box for each tab's content */
+    div[role="tabpanel"] {{
+        background-color: rgba(248, 244, 240, 0.88) !important;
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
+        padding: 1.5rem !important;
+        color: #1a1a2e !important;
+    }}
+
+    /* Search bar — suppress red focus ring */
+    div[data-testid="stTextArea"] textarea:focus,
+    div[data-testid="stTextArea"] textarea:focus-visible {{
+        border-color: rgba(160, 160, 160, 0.6) !important;
+        box-shadow: 0 0 0 1px rgba(160, 160, 160, 0.6) !important;
+        outline: none !important;
+    }}
 
     /* Search button — glassy grey, black text */
     div[data-testid="stButton"] button,
+    div[data-testid="stFormSubmitButton"] button,
     button[data-testid="baseButton-primary"],
-    button[data-testid="baseButton-secondary"] {
+    button[data-testid="baseButton-secondary"] {{
         background: rgba(200, 200, 200, 0.45) !important;
         backdrop-filter: blur(8px) !important;
         -webkit-backdrop-filter: blur(8px) !important;
         border: 1px solid rgba(160, 160, 160, 0.5) !important;
         color: #1a1a2e !important;
         box-shadow: none !important;
-    }
+    }}
     div[data-testid="stButton"] button:hover,
-    button[data-testid="baseButton-primary"]:hover {
+    div[data-testid="stFormSubmitButton"] button:hover,
+    button[data-testid="baseButton-primary"]:hover {{
         background: rgba(180, 180, 180, 0.6) !important;
         color: #1a1a2e !important;
         border: 1px solid rgba(140, 140, 140, 0.6) !important;
-    }
+    }}
 </style>
 """,
     unsafe_allow_html=True,
 )
 
-st.markdown("<h1 style='text-align:center'>POLDERCHECK</h1>", unsafe_allow_html=True)
-st.caption("Connecting Dutch politics and policy to data, in a way anyone can understand.")
+st.markdown(
+    "<div style='text-align:center;margin-bottom:0.5rem'>"
+    "<span class='pc-box'><h1 style='margin:0;padding:0'>POLDERCHECK</h1></span>"
+    "</div>",
+    unsafe_allow_html=True,
+)
+st.markdown(
+    "<div style='text-align:center;margin-top:0.4rem'>"
+    "<span class='pc-box' style='font-size:0.9rem;color:#4a4a6a;max-width:640px;display:inline-block;'>"
+    "Connects what Dutch politicians say in parliament to what the data actually shows. "
+    "Draws on Tweede Kamer debates, CBS statistics, party manifestos, and CPB/PBL policy analysis — "
+    "cites its sources, and says when it does not know. "
+    "<a href='https://github.com/quantockhills/poldercheck' target='_blank' style='color:#4a4a6a;'>Fully open source.</a>"
+    "</span></div>",
+    unsafe_allow_html=True,
+)
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
-    st.markdown("**About**")
-    st.markdown(
-        "Poldercheck connects what Dutch politicians say in parliament "
-        "to what the data actually shows. It cites its sources and says "
-        "when it does not know."
-    )
-    st.divider()
-    st.markdown("**Data sources**")
-    st.markdown(
-        "- [Tweede Kamer debates](https://www.tweedekamer.nl) (live)\n"
-        "- [CBS Statistics Netherlands](https://www.cbs.nl)\n"
-        "- [Party manifestos](https://dnpp.nl) (Manifesto Project)\n"
-        "- [CPB Charted Choices](https://www.cpb.nl)\n"
-        "- [PBL Climate Analysis](https://www.pbl.nl)"
-    )
-    st.divider()
-    st.caption("National-level politics only. Not a stemhulp.")
-    st.divider()
     language = "en" if st.radio("Language", ["Dutch (NL)", "English (EN)"]) == "English (EN)" else "nl"
-    st.radio("Mode", ["Deep (thorough)", "Fast (coming soon)"], index=0)
+    st.radio("Mode", ["Deep (thorough)"], index=0)
+    st.caption("Fast mode: coming soon")
     mode = "deep"
     pedagogical = st.checkbox(
         "Pedagogical mode",
@@ -398,11 +439,12 @@ with st.sidebar:
     )
     st.radio(
         "CBS query mode",
-        ["DuckDB (local SQL)", "MCP (coming soon)"],
+        ["DuckDB (local SQL)"],
         index=0,
         disabled=not include_cbs,
         help="DuckDB: download CSV and query with SQL (faster, more reliable).",
     )
+    st.caption("MCP mode: coming soon")
     cbs_mode = "duckdb"
     num_datasets = st.number_input(
         "CBS datasets to query",
@@ -410,9 +452,12 @@ with st.sidebar:
         help="Number of CBS datasets the agent will search and present.",
         disabled=not include_cbs,
     )
+    st.divider()
+    st.caption("National-level politics only. Not a stemhulp.")
+    st.caption("Fully open source · [github.com/quantockhills/poldercheck](https://github.com/quantockhills/poldercheck)")
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_search, tab_history = st.tabs(["Search", "History"])
+tab_search, tab_history, tab_about = st.tabs(["Search", "History", "About"])
 
 # ── session state ─────────────────────────────────────────────────────────────
 for _k, _v in [
@@ -588,3 +633,49 @@ with tab_history:
                         st.rerun()
 
                 _render_result(c, settings.get("language", "nl"))
+
+# ── about tab ─────────────────────────────────────────────────────────────────
+with tab_about:
+    st.markdown("""
+### Why this exists
+
+Public debate in the Netherlands, like everywhere, is shaped as much by ideology and narrative as by evidence. CBS publishes thousands of datasets on housing, income inequality, energy, health, and more. The Tweede Kamer publishes the full transcript of every parliamentary debate. CPB and PBL independently score every party manifesto before each election. This information exists, it is free, and most people never see it.
+
+Research by the Autoriteit Persoonsgegevens (October 2025) documented that general-purpose chatbots used for voting guidance give biased advice, cite no sources, and systematically ignore local parties. Poldercheck is an experiment in a different direction: it connects what politicians say in parliament to what the data actually shows, tries to present the perspectives of different parties without taking sides, and is honest about what it does not know.
+
+The personal motivation is simpler. I moved to the Netherlands for a PhD and decided to stay. The stikstofcrisis, the housing shortage, the pension reform debates — these come up constantly in Dutch life, and making sense of them requires context that takes years to accumulate. I wanted a tool that could help with that, for me and for anyone else trying to understand the country they live in.
+
+---
+
+### What it draws on
+
+| Source | What it covers |
+|---|---|
+| Tweede Kamer debates | Parliamentary proceedings, motions, voting records (live) |
+| CBS StatLine | 4,000+ statistical datasets: housing, economy, demographics, energy |
+| Party manifestos | Coded quasi-sentence-level manifesto text, every major party since 1945 (Manifesto Project) |
+| CPB Charted Choices | Economic scoring of party manifestos, every election since 1986 |
+| PBL climate analysis | Environmental impact of party manifestos, per election |
+
+---
+
+### On honesty
+
+An AI tool about politics that produces confident misinformation is worse than no tool at all.
+
+**Responses are anchored to retrieved text.** Every factual claim traces back to a specific retrieved passage. The quote is not decorative: it is the evidence. The model is not permitted to assert things that are not grounded in what was retrieved.
+
+**The corpus is finite and acknowledged as such.** When a topic is not in the corpus, the system says so explicitly. Absence of evidence here is not evidence of absence.
+
+**Party positions are framed as positions, not facts.** When a party argues that immigration drives housing costs, the system says "Party X has argued that…" not "Immigration drives housing costs." Political claims are contestable. The system does not adjudicate them.
+
+**Poldercheck is not a stemhulp.** It will not tell you what to vote, recommend a party, or rank parties.
+
+**Multiple perspectives are presented, not a verdict.** For questions like "has party X kept its promises?" the system presents the case that could be made for, and the case against, drawing on what the corpus actually shows. The goal is to hand you the material to form your own view.
+
+---
+
+*Currently covers national politics only. Local parties and municipal councils are on the roadmap.*
+*Fully open source: [github.com/quantockhills/poldercheck](https://github.com/quantockhills/poldercheck)*
+""")
+
