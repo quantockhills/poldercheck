@@ -37,6 +37,45 @@ def _system_prompt(language: str) -> str:
 
 OPENTK_NOT_FOUND = "No relevant recent parliamentary debates found via OpenTK for this query."
 
+
+def format_political_trace(trace: dict) -> str:
+    """Render a pipeline trace dict as a human-readable debug report."""
+    p = trace.get("plan", {})
+    s = trace.get("search", {})
+    y = trace.get("synthesis", {})
+    lines = [
+        "=== POLDERCHECK PIPELINE TRACE ===",
+        "",
+        f"PLAN  ({p.get('duration_s', '?')}s)",
+        f"  OData keywords : {p.get('odata_keywords', [])}",
+        f"  Search terms   : {p.get('search_terms_count', '?')} generated",
+        f"  Date range     : {p.get('date_from', '')} → {p.get('date_to', '')}",
+        f"  Year buckets   : {p.get('year_buckets', [])}",
+        f"  Static passages: {p.get('static_passages_count', '?')}",
+        "",
+        f"SEARCH  ({s.get('duration_s', '?')}s)",
+        f"  Keywords ({s.get('keywords_source', '?')}): {s.get('keywords', [])}",
+        "  OData hits per bucket:",
+    ]
+    buckets = s.get("buckets", {})
+    if buckets:
+        for label in sorted(buckets):
+            lines.append(f"    {label}: {buckets[label]} docs")
+    else:
+        lines.append("    (no year buckets)")
+    lines += [
+        f"  Total OData docs   : {s.get('total_odata_docs', '?')}",
+        f"  OpenTK full-text   : {s.get('opentk_docs_chars', 0)} chars",
+        "",
+        f"SYNTHESIS  ({y.get('duration_s', '?')}s)",
+        f"  OData docs in context  : {y.get('odata_docs_in_context', '?')}",
+        f"  Static passages        : {y.get('static_passages_in_context', '?')}",
+        f"  Total context          : ~{y.get('context_chars', '?')} chars",
+    ]
+    durations = [x.get("duration_s", 0) for x in [p, s, y] if isinstance(x.get("duration_s"), (int, float))]
+    lines.append(f"\nTOTAL: {sum(durations):.1f}s")
+    return "\n".join(lines)
+
 OPENTK_TIMEOUT_S = 300
 
 _ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
@@ -51,6 +90,7 @@ async def run_political_analyst_v2(
     include_manifestos: bool = True,
     include_tk: bool = True,
     callbacks: list | None = None,
+    debug: bool = False,
 ) -> dict:
     """
     Political analyst with live OpenTK MCP search + static ChromaDB retrieval.
@@ -81,6 +121,10 @@ async def run_political_analyst_v2(
             "opentk_docs": "",
             "final_response": "",
             "error": None,
+            "debug": debug,
+            "plan_trace": {},
+            "search_trace": {},
+            "synthesis_trace": {},
         }
         config: dict = {}
         if callbacks:
@@ -89,6 +133,11 @@ async def run_political_analyst_v2(
         return {
             "response": result.get("final_response", "No response generated."),
             "passages": result.get("static_passages", []),
+            "trace": {
+                "plan": result.get("plan_trace", {}),
+                "search": result.get("search_trace", {}),
+                "synthesis": result.get("synthesis_trace", {}),
+            },
         }
 
     try:
@@ -125,4 +174,4 @@ async def run_political_analyst_v2(
                 ),
             },
         ])
-        return {"response": response.content, "passages": static_passages}
+        return {"response": response.content, "passages": static_passages, "trace": {}}

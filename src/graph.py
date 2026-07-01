@@ -29,8 +29,10 @@ class PolderState(TypedDict):
     cbs_queries: list  # LLM-generated Dutch CBS search term variants
     political_response: str
     political_passages: list
+    political_trace: dict  # pipeline trace from political_discover subgraph
     data_response: str
     final_response: str
+    debug: bool  # when True, political subgraph emits [TRACE] lines and trace is returned
 
 
 async def query_planner_node(state: PolderState) -> dict:
@@ -81,14 +83,16 @@ async def political_node(state: PolderState, config=None) -> dict:
             include_manifestos=state.get("include_manifestos", True),
             include_tk=state.get("include_tk", True),
             callbacks=outer_callbacks if outer_callbacks else None,
+            debug=state.get("debug", False),
         )
     except Exception as exc:
         print(f"DEBUG_LOG: political node failed: {type(exc).__name__}: {exc}")
-        result = {"response": "Political analysis unavailable.", "passages": []}
+        result = {"response": "Political analysis unavailable.", "passages": [], "trace": {}}
     print(f"DEBUG_LOG: political node took {time.monotonic() - t0:.1f}s")
     return {
         "political_response": result["response"],
         "political_passages": result["passages"],
+        "political_trace": result.get("trace", {}),
     }
 
 
@@ -267,6 +271,7 @@ async def run_query(
     num_datasets: int = 5,
     extra_callbacks: list | None = None,
     on_status=None,
+    debug: bool = False,
 ) -> dict:
     graph = build_graph()
     initial_state = PolderState(
@@ -282,8 +287,10 @@ async def run_query(
         cbs_queries=[],
         political_response="",
         political_passages=[],
+        political_trace={},
         data_response="",
         final_response="",
+        debug=debug,
     )
     configurable = {}
     if on_status:

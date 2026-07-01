@@ -262,6 +262,54 @@ python scripts/build_cbs_catalog.py
 
 ---
 
+## Debug mode
+
+Toggle in the Streamlit sidebar: **Debug mode** checkbox. Programmatically: pass `debug=True` to `run_query()` or `run_political_analyst_v2()`.
+
+When active, each run of the political pipeline emits `[TRACE]` lines to stdout **and** renders a **Pipeline trace** expander in the UI after the result. The expander shows:
+
+```
+=== POLDERCHECK PIPELINE TRACE ===
+
+PLAN  (8.2s)
+  OData keywords : ['migratie', 'asiel', 'vlucht', 'opvang']
+  Search terms   : 15 generated
+  Date range     : 2020-01-01 → 2026-07-01
+  Year buckets   : ['2020', '2021', '2022', '2023', '2024', '2025', '2026']
+  Static passages: 0
+
+SEARCH  (22.1s)
+  Keywords (plan): ['migratie', 'asiel', 'vlucht', 'opvang']
+  OData hits per bucket:
+    2020: 12 docs
+    2021: 8 docs
+    ...
+  Total OData docs   : 47
+  OpenTK full-text   : 3400 chars
+
+SYNTHESIS  (67.3s)
+  OData docs in context  : 10
+  Static passages        : 0
+  Total context          : ~14200 chars
+
+TOTAL: 97.6s
+```
+
+**What each section diagnoses:**
+
+| Section | Metric | What a bad value means |
+|---|---|---|
+| PLAN | `OData keywords` | Empty list → keyword heuristic fallback (check LLM output format, `---` separator) |
+| PLAN | `Year buckets` | Empty → date parsing missed the query; single flat date range used instead |
+| SEARCH | `OData hits per bucket` | All zeros → OData API unreachable, or keywords too specific for `Stenogram` docs |
+| SEARCH | `Total OData docs` | 0 despite non-zero hits → was the old score-filter bug (now fixed; score=0 when MCP fails) |
+| SYNTHESIS | `context_chars` | Very large (>30k) → synthesis timeout risk; reduce `MAX_ODATA_DOCS_PER_YEAR` |
+| TOTAL | overall time | >180s → check synthesis timeout (currently 120s) and MCP subprocess startup |
+
+The trace is always collected (not just in debug mode) and stored in `PolderState.political_trace`. Debug mode only controls whether it's displayed in the UI and whether `[TRACE]` lines appear in stdout.
+
+---
+
 ## Known quirks
 
 | Quirk | Location | Notes |

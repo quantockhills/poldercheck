@@ -8,6 +8,7 @@ import asyncio
 import json
 import re
 import subprocess
+import time
 from typing import TypedDict
 from urllib.parse import quote
 
@@ -22,7 +23,7 @@ _ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
 _MCP_BIN: str = ""
 
 ODATA_PARTY_EXCERPTS = 10
-MAX_ODATA_DOCS_PER_YEAR = 8
+MAX_ODATA_DOCS_PER_YEAR = 12
 MCP_PARALLEL = 8
 
 
@@ -58,6 +59,11 @@ class PoliticalDiscoverState(TypedDict):
     # Synthesis
     final_response: str
     error: str | None
+    # Debug / observability
+    debug: bool
+    plan_trace: dict    # timing + params from plan node
+    search_trace: dict  # per-bucket OData counts + MCP stats from search node
+    synthesis_trace: dict  # context size + timing from synthesis node
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +74,8 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
     """Generate Dutch search terms from the query, extract date range, search static corpus."""
     from langchain_openai import ChatOpenAI
 
+    t0 = time.perf_counter()
+    debug = state.get("debug", False)
     query = state["query"]
     include_manifestos = state.get("include_manifestos", False)
 
@@ -157,7 +165,6 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         w.strip().lower() for w in kw_block.strip().split("\n")
         if w.strip() and w.strip().isalpha() and 4 <= len(w.strip()) <= 9
     ][:5]
-    print(f"DEBUG_LOG: plan odata_keywords={odata_keywords!r}")
 
     # Search static corpus
     static_passages: list = []
@@ -167,6 +174,19 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         except Exception:
             pass
 
+    plan_trace = {
+        "odata_keywords": odata_keywords,
+        "search_terms_count": len(seen_terms),
+        "date_from": date_from,
+        "date_to": date_to,
+        "year_buckets": [b["year_label"] for b in year_buckets],
+        "static_passages_count": len(static_passages),
+        "duration_s": round(time.perf_counter() - t0, 1),
+    }
+    print(f"DEBUG_LOG: plan odata_keywords={odata_keywords!r} dates={date_from}→{date_to} buckets={plan_trace['year_buckets']}")
+    if debug:
+        print(f"[TRACE] PLAN: {plan_trace}")
+
     return {
         "search_terms": sorted(seen_terms),
         "odata_keywords": odata_keywords,
@@ -175,6 +195,7 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         "year_buckets": year_buckets,
         "static_passages": static_passages,
         "error": None,
+        "plan_trace": plan_trace,
     }
 
 
@@ -227,7 +248,7 @@ async def _discover_odata_inner(
     odata_filter = " and ".join(parts)
 
     async with httpx.AsyncClient(timeout=15) as c:
-        url = f"{_ODATA_BASE}/Document?$filter={quote(odata_filter)}&$select=DocumentNummer,Onderwerp,Datum&$orderby=Datum asc&$top={max_docs}"
+        url = f"{_ODATA_BASE}/Document?$filter={quote(odata_filter)}&$select=DocumentNummer,Onderwerp,Datum&$orderby=Datum desc&$top={max_docs}"
         resp = await c.get(url, headers={"Accept": "application/json"})
         docs = resp.json().get("value", [])
 
@@ -288,6 +309,8 @@ async def _discover_odata_inner(
 
 async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
     """OData discovery (parallel per year via asyncio.gather) + OpenTK content search."""
+    t0 = time.perf_counter()
+    debug = state.get("debug", False)
     search_terms = state.get("search_terms", [])
     date_from_full = state.get("date_from", "2020-01-01")
     date_to_full = state.get("date_to", "2026-01-01")
@@ -299,7 +322,7 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
     odata_keywords = state.get("odata_keywords", [])
     if odata_keywords:
         keywords = odata_keywords[:8]
-        print(f"DEBUG_LOG: search using plan odata_keywords={keywords!r}")
+        keywords_source = "plan"
     else:
         _STOP = {
             "tweede", "kamer", "debat", "politieke", "standpunten", "verandering",
@@ -315,9 +338,12 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
             w for t in search_terms[:10] for w in t.lower().split()
             if len(w) >= 5 and w.isalpha() and w not in _STOP
         ))[:8]
-        print(f"DEBUG_LOG: search using fallback keywords={keywords!r}")
+        keywords_source = "fallback"
+    print(f"DEBUG_LOG: search keywords ({keywords_source}): {keywords!r}")
 
     # OData discovery — parallel per year if buckets exist
+    bucket_counts: dict[str, int] = {}
+
     if year_buckets and len(year_buckets) > 1:
         async def _bucket_search(b: dict) -> list[dict]:
             try:
@@ -327,8 +353,10 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
                 )
                 for r in res:
                     r["year_bucket"] = b["year_label"]
+                bucket_counts[b["year_label"]] = len(res)
                 return res
             except Exception:
+                bucket_counts[b["year_label"]] = 0
                 return []
 
         per_year = await asyncio.gather(*[_bucket_search(b) for b in year_buckets])
@@ -338,8 +366,10 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
             keywords=keywords, date_from=date_from_full, date_to=date_to_full,
             search_terms=search_terms,
         )
+        bucket_counts["all"] = len(odata_results)
 
     odata_results.sort(key=lambda r: r["score"], reverse=True)
+    print(f"DEBUG_LOG: OData total {len(odata_results)} docs across {len(bucket_counts)} bucket(s)")
 
     # OpenTK content search (only if include_tk)
     opentk_docs = ""
@@ -391,7 +421,18 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
                 blocks = [f"Document {did}:\n{text}" for did, text in contents if text]
                 opentk_docs = "\n\n---\n\n".join(blocks)
 
-    return {"odata_results": odata_results, "opentk_docs": opentk_docs, "error": None}
+    search_trace = {
+        "keywords_source": keywords_source,
+        "keywords": keywords,
+        "buckets": bucket_counts,
+        "total_odata_docs": len(odata_results),
+        "opentk_docs_chars": len(opentk_docs),
+        "duration_s": round(time.perf_counter() - t0, 1),
+    }
+    if debug:
+        print(f"[TRACE] SEARCH: {search_trace}")
+
+    return {"odata_results": odata_results, "opentk_docs": opentk_docs, "error": None, "search_trace": search_trace}
 
 
 # ---------------------------------------------------------------------------
@@ -403,6 +444,8 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
 
     from langchain_openai import ChatOpenAI
 
+    t0 = time.perf_counter()
+    debug = state.get("debug", False)
     query = state["query"]
     language = state.get("language", "nl")
     odata_results = state.get("odata_results", [])
@@ -482,16 +525,28 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
     else:
         sys_prompt += "LANGUAGE: Respond entirely in Dutch.\n"
 
+    context_str = "".join(parts)
     response = await llm.ainvoke(
         [
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": "".join(parts)},
+            {"role": "user", "content": context_str},
         ]
     )
+
+    synthesis_trace = {
+        "odata_docs_in_context": min(len(odata_results), 10),
+        "static_passages_in_context": len(static_passages),
+        "opentk_docs_chars": len(opentk_docs),
+        "context_chars": len(context_str),
+        "duration_s": round(time.perf_counter() - t0, 1),
+    }
+    if debug:
+        print(f"[TRACE] SYNTHESIS: {synthesis_trace}")
 
     return {
         "final_response": response.content,
         "error": None,
+        "synthesis_trace": synthesis_trace,
     }
 
 
