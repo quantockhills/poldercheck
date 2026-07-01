@@ -348,17 +348,26 @@ st.markdown(
         color: #1a1a2e;
     }}
 
-    /* Equal-width tabs */
-    div[data-testid="stTabs"] div[role="tablist"] {{
+    /* Equal-width tabs + frosted tab bar */
+    div[data-testid="stTabs"] div[role="tablist"],
+    [data-baseweb="tab-list"] {{
         display: flex !important;
+        background-color: rgba(248, 244, 240, 0.88) !important;
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
     }}
-    div[data-testid="stTabs"] div[role="tablist"] button[role="tab"] {{
+    div[data-testid="stTabs"] div[role="tablist"] button[role="tab"],
+    [data-baseweb="tab-list"] button[role="tab"] {{
         flex: 1 !important;
         justify-content: center !important;
     }}
 
     /* Frosted box for each tab's content */
-    div[role="tabpanel"] {{
+    div[role="tabpanel"],
+    [data-baseweb="tab-panel"],
+    div[data-testid="stTabPanel"],
+    div[data-testid="stTabsTabPanel"],
+    div[data-baseweb="tab-panel"][role="tabpanel"] {{
         background-color: rgba(248, 244, 240, 0.88) !important;
         backdrop-filter: blur(6px) !important;
         -webkit-backdrop-filter: blur(6px) !important;
@@ -404,16 +413,6 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True,
 )
-st.markdown(
-    "<div style='text-align:center;margin-top:0.4rem'>"
-    "<span class='pc-box' style='font-size:0.9rem;color:#4a4a6a;max-width:640px;display:inline-block;'>"
-    "Connects what Dutch politicians say in parliament to what the data actually shows. "
-    "Draws on Tweede Kamer debates, CBS statistics, party manifestos, and CPB/PBL policy analysis — "
-    "cites its sources, and says when it does not know. "
-    "<a href='https://github.com/quantockhills/poldercheck' target='_blank' style='color:#4a4a6a;'>Fully open source.</a>"
-    "</span></div>",
-    unsafe_allow_html=True,
-)
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -457,7 +456,7 @@ with st.sidebar:
     st.caption("Fully open source · [github.com/quantockhills/poldercheck](https://github.com/quantockhills/poldercheck)")
 
 # ── tabs ──────────────────────────────────────────────────────────────────────
-tab_search, tab_history, tab_about = st.tabs(["Search", "History", "About"])
+tab_search, tab_history = st.tabs(["Search", "History"])
 
 # ── session state ─────────────────────────────────────────────────────────────
 for _k, _v in [
@@ -514,7 +513,7 @@ def _search_thread(
 with tab_search:
     with st.form("search_form", clear_on_submit=False):
         query = st.text_area(
-            "Ask a question about Dutch politics or policy",
+            "Ask a question about Dutch politics or CBS data, or [learn more about the project](about)",
             placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
             height=120,
         )
@@ -634,48 +633,4 @@ with tab_history:
 
                 _render_result(c, settings.get("language", "nl"))
 
-# ── about tab ─────────────────────────────────────────────────────────────────
-with tab_about:
-    st.markdown("""
-### Why this exists
-
-Public debate in the Netherlands, like everywhere, is shaped as much by ideology and narrative as by evidence. CBS publishes thousands of datasets on housing, income inequality, energy, health, and more. The Tweede Kamer publishes the full transcript of every parliamentary debate. CPB and PBL independently score every party manifesto before each election. This information exists, it is free, and most people never see it.
-
-Research by the Autoriteit Persoonsgegevens (October 2025) documented that general-purpose chatbots used for voting guidance give biased advice, cite no sources, and systematically ignore local parties. Poldercheck is an experiment in a different direction: it connects what politicians say in parliament to what the data actually shows, tries to present the perspectives of different parties without taking sides, and is honest about what it does not know.
-
-The personal motivation is simpler. I moved to the Netherlands for a PhD and decided to stay. The stikstofcrisis, the housing shortage, the pension reform debates — these come up constantly in Dutch life, and making sense of them requires context that takes years to accumulate. I wanted a tool that could help with that, for me and for anyone else trying to understand the country they live in.
-
----
-
-### What it draws on
-
-| Source | What it covers |
-|---|---|
-| Tweede Kamer debates | Parliamentary proceedings, motions, voting records (live) |
-| CBS StatLine | 4,000+ statistical datasets: housing, economy, demographics, energy |
-| Party manifestos | Coded quasi-sentence-level manifesto text, every major party since 1945 (Manifesto Project) |
-| CPB Charted Choices | Economic scoring of party manifestos, every election since 1986 |
-| PBL climate analysis | Environmental impact of party manifestos, per election |
-
----
-
-### On honesty
-
-An AI tool about politics that produces confident misinformation is worse than no tool at all.
-
-**Responses are anchored to retrieved text.** Every factual claim traces back to a specific retrieved passage. The quote is not decorative: it is the evidence. The model is not permitted to assert things that are not grounded in what was retrieved.
-
-**The corpus is finite and acknowledged as such.** When a topic is not in the corpus, the system says so explicitly. Absence of evidence here is not evidence of absence.
-
-**Party positions are framed as positions, not facts.** When a party argues that immigration drives housing costs, the system says "Party X has argued that…" not "Immigration drives housing costs." Political claims are contestable. The system does not adjudicate them.
-
-**Poldercheck is not a stemhulp.** It will not tell you what to vote, recommend a party, or rank parties.
-
-**Multiple perspectives are presented, not a verdict.** For questions like "has party X kept its promises?" the system presents the case that could be made for, and the case against, drawing on what the corpus actually shows. The goal is to hand you the material to form your own view.
-
----
-
-*Currently covers national politics only. Local parties and municipal councils are on the roadmap.*
-*Fully open source: [github.com/quantockhills/poldercheck](https://github.com/quantockhills/poldercheck)*
-""")
 
