@@ -146,9 +146,12 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         "Then output exactly: ---\n\n"
         "Part 2: List 3-5 short Dutch root words (4-9 characters) that would appear in "
         "the TITLE of a Tweede Kamer debate about this topic. These are used for substring "
-        "title search — pick the broadest roots that cover all related debate titles. "
-        "Example: for a housing query: huur, woning, koop. "
-        "For a migration query: migratie, asiel, vreemdelingen. "
+        "title search — so each word must be specific enough to isolate this topic, not so "
+        "broad that it matches unrelated debates. "
+        "Good: words that almost only appear in debates about THIS topic. "
+        "Bad: words like 'macht', 'bedrijf', 'veilig', 'beleid' that appear in hundreds of unrelated debates. "
+        "Example: for a women's rights query: emancip, quotum, gender, vrouwen. NOT: macht, bedrijf. "
+        "For a migration query: migratie, asiel, vreemd. NOT: veilig, beleid. "
         "Return one word per line, nothing else."
     )
     resp = await llm.ainvoke([{"role": "user", "content": term_prompt}])
