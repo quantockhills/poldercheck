@@ -1,6 +1,6 @@
 # Poldercheck
 
-*Connecting Dutch politics and policy to data, in a way anyone can understand.*
+Connecting Dutch politics and policy to data, in a way anyone can understand.
 
 ![Poldercheck UI](docs/screenshot.png)
 
