@@ -291,6 +291,18 @@ _TOKEN = os.environ.get("ACCESS_TOKEN", "")
 if _TOKEN and st.query_params.get("token") != _TOKEN:
     st.stop()
 
+@st.cache_resource
+def _static_corpus_available() -> bool:
+    try:
+        import chromadb
+        _path = os.path.join(os.path.dirname(__file__), "..", "chroma_db")
+        client = chromadb.PersistentClient(path=_path)
+        client.get_collection("poldercheck_static")
+        return True
+    except Exception:
+        return False
+
+
 _BG_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "bg.jpg")
 try:
     with open(_BG_PATH, "rb") as _f:
@@ -430,11 +442,15 @@ with st.sidebar:
     )
     st.divider()
     st.markdown("**Sources**")
+    _manifesto_ready = _static_corpus_available()
     include_manifestos = st.checkbox(
         "Party manifestos & CPB/PBL",
-        value=True,
+        value=_manifesto_ready,
+        disabled=not _manifesto_ready,
         help="Search party PDFs, CPB Charted Choices, and PBL Climate Analysis.",
     )
+    if not _manifesto_ready:
+        st.caption("Manifesto corpus: coming soon")
     include_tk = st.checkbox("Tweede Kamer debates", value=True, help="Search live parliamentary debates via OpenTK.")
     include_cbs = st.checkbox(
         "CBS statistical data", value=True, help="Fetch CBS StatLine data to support or challenge political claims.",
