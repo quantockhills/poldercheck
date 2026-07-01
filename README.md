@@ -2,6 +2,8 @@
 
 *Connecting Dutch politics and policy to data, in a way anyone can understand.*
 
+![Poldercheck UI](docs/screenshot.png)
+
 ---
 
 ## Why this exists
@@ -92,7 +94,7 @@ political node  ── political_discover subgraph ─────────�
     │            + OpenTK full-text search (sequential per term)       │
     │   synth:   merge findings → political analyst response           │
     │────────────────────────────────────────────────────────────────  │
-    │   Static fallback: ChromaDB over Manifesto Project + CPB/PBL     │
+    │   Static (toggleable): ChromaDB over Manifesto Project + CPB/PBL  │
     │
     ▼
 data node  ── orchestrator–worker subgraph ──────────────────────────
@@ -118,7 +120,7 @@ with "show sources" toggle for full retrieved passages
 **The political node** has two retrieval paths:
 
 - **Live parliamentary search** via the Tweede Kamer's OData API (`gegevensmagazijn.tweedekamer.nl`) combined with the OpenTK MCP server (github.com/r-huijts/opentk-mcp). The OData layer searches debate titles using short Dutch root words (e.g. `migratie`, `asiel`) to find relevant Stenogram documents, retrieving the 12 most-recent per year bucket, newest-first. Searches run in parallel per year bucket, so a "since 2020" query covers 2020–2025 concurrently. When the query specifies no date, the default window is the last two years.
-- **Static corpus search** via ChromaDB over text from the Manifesto Project API (party manifesto quasi-sentences, tagged by policy category) and CPB/PBL PDF reports. This is the fallback when OpenTK is unavailable.
+- **Static corpus search** via ChromaDB over text from the Manifesto Project API (party manifesto quasi-sentences, tagged by policy category) and CPB/PBL PDF reports. This runs on every query where the Party manifestos and CPB/PBL source is enabled in the sidebar (on by default), in parallel with the live parliamentary search. It also serves as the sole source if the live pipeline is unavailable.
 
 **The data node** retrieves CBS statistics without a live API connection. For each query it:
 

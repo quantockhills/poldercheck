@@ -328,6 +328,9 @@ st.markdown(
     }}
     * {{ border-radius: 0 !important; }}
 
+    /* Hide auto-generated multipage nav from sidebar */
+    [data-testid="stSidebarNav"] {{ display: none !important; }}
+
     /* Sidebar */
     section[data-testid="stSidebar"],
     section[data-testid="stSidebar"] > div,
@@ -513,7 +516,7 @@ def _search_thread(
 with tab_search:
     with st.form("search_form", clear_on_submit=False):
         query = st.text_area(
-            "Ask a question about Dutch politics or CBS data, or [learn more about the project](about)",
+            "Ask a question about Dutch politics or CBS data, or [learn more about the project](/about)",
             placeholder="e.g. What do parties propose about housing affordability, and what does CBS show?",
             height=120,
         )
