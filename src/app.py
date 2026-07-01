@@ -483,7 +483,7 @@ with st.sidebar:
     cbs_mode = "duckdb"
     num_datasets = st.number_input(
         "CBS datasets to query",
-        min_value=1, max_value=10, value=3,
+        min_value=1, max_value=10, value=5,
         help="Number of CBS datasets the agent will search and present.",
         disabled=not include_cbs,
     )
