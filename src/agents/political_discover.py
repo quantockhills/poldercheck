@@ -104,27 +104,27 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         date_from = f"{years[0]}-01-01"
         date_to = f"{years[0] + 1}-01-01"
     else:
-        date_from = "2020-01-01"
+        date_from = f"{today_year - 1}-01-01"
         date_to = today_str
 
-    # Create year buckets for multi-year ranges (parallel OData search per year)
+    # Create year buckets for parallel OData search — always bucket when range > 1 year
     year_buckets: list[dict] = []
     if _since_match:
-        for y in range(anchor, today_year + 1):
+        bucket_start = anchor
+    elif len(years) >= 2:
+        bucket_start = years[0]
+    elif years:
+        bucket_start = None  # single-year query — no buckets needed
+    else:
+        bucket_start = today_year - 1  # no date anchor — default to last 2 years
+
+    if bucket_start is not None:
+        for y in range(bucket_start, today_year + 1):
             year_buckets.append({
                 "date_from": f"{y}-01-01",
                 "date_to": f"{y}-12-31",
                 "year_label": str(y),
             })
-    elif len(years) >= 2:
-        unique_years = sorted(set(years))
-        if len(unique_years) > 2:
-            for y in unique_years:
-                year_buckets.append({
-                    "date_from": f"{y}-01-01",
-                    "date_to": f"{y}-12-31",
-                    "year_label": str(y),
-                })
 
     # LLM setup
     cfg = AGENT_CONFIGS.get("opentk_agent") or AGENT_CONFIGS["political_analyst"]
