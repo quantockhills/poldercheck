@@ -121,6 +121,7 @@ async def run_political_analyst_v2(
             "odata_results": [],
             "opentk_docs": "",
             "final_response": "",
+            "coverage_note": "",
             "error": None,
             "debug": debug,
             "plan_trace": {},

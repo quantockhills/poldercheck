@@ -25,6 +25,7 @@ _MCP_BIN: str = ""
 ODATA_PARTY_EXCERPTS = 10
 MAX_ODATA_DOCS_PER_YEAR = 12
 MCP_PARALLEL = 8
+ODATA_EARLIEST_YEAR = 2018
 
 
 def _init_mcp_bin():
@@ -58,6 +59,7 @@ class PoliticalDiscoverState(TypedDict):
     opentk_docs: str
     # Synthesis
     final_response: str
+    coverage_note: str  # non-empty when query predates OData coverage
     error: str | None
     # Debug / observability
     debug: bool
@@ -110,12 +112,23 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         date_from = f"{today_year - 4}-01-01"
         date_to = today_str
 
+    # Clamp to OData coverage — records before ODATA_EARLIEST_YEAR are unavailable
+    requested_date_from = date_from
+    if date_from < f"{ODATA_EARLIEST_YEAR}-01-01":
+        date_from = f"{ODATA_EARLIEST_YEAR}-01-01"
+    coverage_note = (
+        f"Note: live parliamentary search (Tweede Kamer OData API) covers {ODATA_EARLIEST_YEAR} onwards. "
+        f"Records before {ODATA_EARLIEST_YEAR} are not available in this system. "
+        f"The query requested data from {requested_date_from[:4]}, but search was limited to {ODATA_EARLIEST_YEAR}–present."
+        if requested_date_from < f"{ODATA_EARLIEST_YEAR}-01-01" else ""
+    )
+
     # Create year buckets for parallel OData search — always bucket when range > 1 year
     year_buckets: list[dict] = []
     if _since_match:
-        bucket_start = anchor
+        bucket_start = max(anchor, ODATA_EARLIEST_YEAR)
     elif len(years) >= 2:
-        bucket_start = years[0]
+        bucket_start = max(years[0], ODATA_EARLIEST_YEAR)
     elif years:
         bucket_start = None  # single-year query — no buckets needed
     else:
@@ -202,6 +215,7 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         "date_to": date_to,
         "year_buckets": year_buckets,
         "static_passages": static_passages,
+        "coverage_note": coverage_note,
         "error": None,
         "plan_trace": plan_trace,
     }
@@ -516,6 +530,9 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
     date_to = state.get("date_to", "")
     if date_from and date_to:
         parts.append(f"Date range of search: {date_from} to {date_to}.\n")
+    coverage_note = state.get("coverage_note", "")
+    if coverage_note:
+        parts.append(f"{coverage_note}\n")
 
     parts.append("Cite each parliamentary document by its ID and date.\n")
     parts.append(

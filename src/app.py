@@ -468,7 +468,7 @@ with st.sidebar:
     )
     if not _manifesto_ready:
         st.caption("Manifesto corpus: coming soon")
-    include_tk = st.checkbox("Tweede Kamer debates", value=True, help="Search live parliamentary debates via OpenTK.")
+    include_tk = st.checkbox("Tweede Kamer debates", value=True, help="Search live parliamentary debates via OpenTK (2018 onwards).")
     include_cbs = st.checkbox(
         "CBS statistical data", value=True, help="Fetch CBS StatLine data to support or challenge political claims.",
     )
