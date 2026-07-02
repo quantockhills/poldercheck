@@ -219,6 +219,18 @@ POLDERCHECK_DATA_MODEL=qwen/qwen3-30b-a3b
 POLDERCHECK_SYNTHESIS_MODEL=anthropic/claude-sonnet-4-6
 ```
 
+Two optional settings for hosted deployments:
+
+```bash
+# Gate the app behind a secret link: only /?token=<value> gets through
+ACCESS_TOKEN=your-secret-value
+
+# Presentation mode, for demo hosting: disables the manifesto/CPB corpus
+# (useful on low-RAM servers that cannot hold the ChromaDB index) and shows
+# a notice on the search screen explaining search scope and expected runtime
+PRESENTATION_MODE=1
+```
+
 **Build the local indexes.** This runs once and populates the ChromaDB catalog used for CBS dataset discovery and the static political corpus.
 
 ```bash
