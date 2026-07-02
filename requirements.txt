@@ -22,3 +22,4 @@ python-dotenv
 pytest
 ragas==0.4.3
 langfuse
+rank_bm25

@@ -5,10 +5,12 @@ subgraph for automatic tracing, state management, and future Send-based fan-out.
 """
 
 import asyncio
+import io
 import json
 import re
 import subprocess
 import time
+import zipfile
 from typing import TypedDict
 from urllib.parse import quote
 
@@ -22,10 +24,12 @@ from src.ingest.retrieve import format_for_prompt, retrieve_static
 _ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
 _MCP_BIN: str = ""
 
-ODATA_PARTY_EXCERPTS = 10
 MAX_ODATA_DOCS_PER_YEAR = 12
 MCP_PARALLEL = 8
 ODATA_EARLIEST_YEAR = 2018
+CHUNK_CHARS = 1500
+MAX_CHUNKS_PER_DOC = 60
+MAX_RANKED_DEBATES = 15
 
 
 def _init_mcp_bin():
@@ -249,15 +253,30 @@ async def _mcp_tool(tool: str, args: dict) -> dict | None:
             pass
 
 
-async def _discover_odata_inner(
+def _extract_text(blob: bytes) -> str:
+    """Extract plain text from a TK document resource (PDF or DOCX)."""
+    try:
+        if blob[:4] == b"PK\x03\x04":  # docx is a zip container
+            with zipfile.ZipFile(io.BytesIO(blob)) as z:
+                xml = z.read("word/document.xml").decode("utf-8", errors="replace")
+            text = re.sub(r"<[^>]+>", " ", xml)
+        else:
+            from pypdf import PdfReader
+
+            reader = PdfReader(io.BytesIO(blob))
+            text = " ".join(p.extract_text() or "" for p in reader.pages)
+        return " ".join(text.split())
+    except Exception:
+        return ""
+
+
+async def _fetch_bucket_docs(
     keywords: list[str],
     date_from: str,
     date_to: str,
-    search_terms: list[str],
     max_docs: int = 15,
-    excerpt_docs: int = 10,
 ) -> list[dict]:
-    """Run the full OData → analyze → party excerpts pipeline."""
+    """OData title search for one date bucket; downloads and extracts each doc's full text."""
     kw_filter = " or ".join(f"contains(tolower(Onderwerp),'{k}')" for k in keywords[:5])
     parts = [
         "Verwijderd eq false",
@@ -269,64 +288,196 @@ async def _discover_odata_inner(
     ]
     odata_filter = " and ".join(parts)
 
-    async with httpx.AsyncClient(timeout=15) as c:
-        url = f"{_ODATA_BASE}/Document?$filter={quote(odata_filter)}&$select=DocumentNummer,Onderwerp,Datum&$orderby=Datum desc&$top={max_docs}"
+    async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
+        url = (
+            f"{_ODATA_BASE}/Document?$filter={quote(odata_filter)}"
+            f"&$select=Id,DocumentNummer,Onderwerp,Datum&$orderby=Datum desc&$top={max_docs}"
+        )
         resp = await c.get(url, headers={"Accept": "application/json"})
         docs = resp.json().get("value", [])
+        if not docs:
+            return []
 
-    if not docs:
-        return []
+        sem = asyncio.Semaphore(MCP_PARALLEL)
 
-    # analyze_document_relevance (parallel)
-    sem = asyncio.Semaphore(MCP_PARALLEL)
+        async def _download(d: dict):
+            async with sem:
+                try:
+                    r = await c.get(f"{_ODATA_BASE}/Document({d['Id']})/resource")
+                    d["text"] = await asyncio.to_thread(_extract_text, r.content)
+                except Exception:
+                    d["text"] = ""
 
-    async def _analyze(doc_id: str):
-        async with sem:
-            data = await _mcp_tool("analyze_document_relevance", {"docId": doc_id, "searchTerms": search_terms or keywords})
-            if data:
-                return {
-                    "score": data.get("relevanceScore", 0),
-                    "parties": data.get("entities", {}).get("parties", []),
-                    "chars": data.get("statistics", {}).get("characterCount", 0) or 0,
-                }
-            return {"score": 0, "parties": [], "chars": 0}
+        await asyncio.gather(*[_download(d) for d in docs])
+    return docs
 
-    results: list[dict] = []
-    tasks = [_analyze(d["DocumentNummer"]) for d in docs]
-    for d, analysis in zip(docs, await asyncio.gather(*tasks)):
-        results.append(
-            {
-                "doc_id": d["DocumentNummer"],
-                "datum": str(d.get("Datum", ""))[:10],
-                "onderwerp": d.get("Onderwerp", ""),
-                "score": analysis["score"],
-                "parties": analysis["parties"],
-                "n_parties": len(analysis["parties"]),
-                "chars": analysis["chars"],
-                "party_excerpts": {},
-            }
-        )
 
-    results.sort(key=lambda r: r["score"], reverse=True)
+_NL_STOP = {
+    "van", "het", "een", "voor", "over", "met", "der", "den", "des", "aan",
+    "bij", "naar", "uit", "dat", "die", "deze", "zijn", "niet", "ook", "als",
+    "wordt", "worden", "the", "and", "how", "what",
+}
 
-    # find_party_in_document for top N
-    for doc in results[:excerpt_docs]:
-        parties = doc["parties"]
-        if not parties:
-            continue
-        party_tasks = [_mcp_tool("find_party_in_document", {"docId": doc["doc_id"], "partyName": p}) for p in parties[:8]]
-        party_results = await asyncio.gather(*party_tasks)
-        excerpts: dict[str, list[str]] = {}
-        for party, pdata in zip(parties[:8], party_results):
-            if not pdata:
+_PARTY_PATTERNS = [
+    ("GroenLinks-PvdA", r"\bGroenLinks-PvdA\b"),
+    ("VVD", r"\bVVD\b"), ("PVV", r"\bPVV\b"), ("CDA", r"\bCDA\b"), ("D66", r"\bD66\b"),
+    ("GroenLinks", r"\bGroenLinks\b"), ("PvdA", r"\bPvdA\b"), ("SP", r"\bSP\b"),
+    ("ChristenUnie", r"\bChristenUnie\b"), ("SGP", r"\bSGP\b"),
+    ("PvdD", r"\bPartij voor de Dieren\b|\bPvdD\b"), ("JA21", r"\bJA21\b"),
+    ("NSC", r"\bNSC\b"), ("FVD", r"\bForum voor Democratie\b|\bFVD\b"),
+    ("BBB", r"\bBBB\b"), ("Volt", r"\bVolt\b"), ("DENK", r"\bDENK\b"), ("50PLUS", r"\b50PLUS\b"),
+]
+
+
+def _detect_parties(text: str) -> list[str]:
+    found = [name for name, pat in _PARTY_PATTERNS if re.search(pat, text)]
+    if "GroenLinks-PvdA" in found:
+        found = [p for p in found if p not in ("GroenLinks", "PvdA")]
+    return found
+
+
+def _query_tokens(search_terms: list[str], keywords: list[str]) -> list[str]:
+    toks = set()
+    for phrase in list(search_terms) + list(keywords):
+        for t in re.findall(r"[a-zà-ÿ0-9]+", phrase.lower()):
+            if len(t) > 2 and t not in _NL_STOP:
+                toks.add(t)
+    return sorted(toks)
+
+
+def _bm25_tokens(text: str, q_tokens: list[str]) -> list[str]:
+    """Tokenize for BM25 with decompound-lite matching: a document token also emits any
+    query token it starts or ends with, so Dutch compounds like 'vrouwenquotum' match
+    both 'vrouwen' and 'quotum' queries."""
+    toks = [t for t in re.findall(r"[a-zà-ÿ0-9]+", text.lower()) if len(t) > 2]
+    extra = []
+    for t in toks:
+        for q in q_tokens:
+            if len(q) >= 5 and q != t and len(t) >= len(q) + 3 and (t.startswith(q) or t.endswith(q)):
+                extra.append(q)
+    return toks + extra
+
+
+def _party_excerpts_local(text: str, parties: list[str], q_tokens: list[str]) -> dict:
+    """Snippets around party mentions, preferring those containing query terms.
+    Replaces the per-party MCP subprocess calls: we already hold the full text."""
+    excerpts: dict[str, list[str]] = {}
+    tl = text.lower()
+    for party in parties[:8]:
+        scored = []
+        for m in list(re.finditer(re.escape(party.lower()), tl))[:12]:
+            start = max(0, m.start() - 100)
+            snip = text[start : start + 300]
+            hits = sum(1 for q in q_tokens if q in snip.lower())
+            scored.append((hits, snip))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        chosen = [s for hits, s in scored[:2] if hits > 0]
+        if chosen:
+            excerpts[party] = chosen
+    return excerpts
+
+
+async def _llm_triage(query: str, results: list[dict]) -> dict | None:
+    """One LLM call scoring each candidate's champion passage 0-10 against the query.
+    Returns {doc_id: score} or None on failure (caller falls back to BM25 ranking)."""
+    from langchain_openai import ChatOpenAI
+
+    cfg = AGENT_CONFIGS.get("opentk_agent") or AGENT_CONFIGS["political_analyst"]
+    if not cfg.get("model"):
+        cfg = AGENT_CONFIGS["political_analyst"]
+    llm = ChatOpenAI(
+        base_url=cfg["base_url"], api_key=cfg["api_key"], model=cfg["model"],
+        max_tokens=1200, timeout=60, max_retries=1,
+    )
+    lines = [
+        f"{r['doc_id']} | {r['datum']} | {r['onderwerp'][:80]}\n  passage: {r['champion'][:900] or '(no text extracted)'}"
+        for r in results
+    ]
+    prompt = (
+        f"Question: {query}\n\n"
+        f"Below are {len(results)} Dutch parliamentary debate documents, each with its best-matching passage.\n"
+        "Score each document 0-10 for how much it helps answer the question. "
+        "10 = directly discusses the question's topic with substance, 0 = unrelated.\n"
+        'Reply with ONLY a JSON object mapping document id to integer score, e.g. {"2024D12345": 7}.\n\n'
+        + "\n\n".join(lines)
+    )
+    try:
+        resp = await llm.ainvoke([{"role": "user", "content": prompt}])
+        m = re.search(r"\{.*\}", resp.content.strip(), re.DOTALL)
+        if not m:
+            return None
+        out = {}
+        for k, v in json.loads(m.group(0)).items():
+            try:
+                out[k] = int(v)
+            except (TypeError, ValueError):
                 continue
-            occs = pdata.get("occurrences", [])
-            snips = [occ.get("snippet", "")[:200] for occ in occs[:3] if occ.get("snippet")]
-            if snips:
-                excerpts[party] = snips
-        doc["party_excerpts"] = excerpts
+        return out or None
+    except Exception as exc:
+        print(f"DEBUG_LOG: LLM triage failed, falling back to BM25 ranking: {exc}")
+        return None
 
-    return results
+
+async def _rank_debates(query: str, docs: list[dict], q_tokens: list[str]) -> list[dict]:
+    """BM25 champion chunk per doc + one LLM triage call. Returns the kept debates,
+    each carrying its champion passage and locally extracted party excerpts."""
+    from rank_bm25 import BM25Okapi
+
+    chunks: list[str] = []
+    owner: list[int] = []
+    for i, d in enumerate(docs):
+        text = d.get("text", "")
+        cs = [text[j : j + CHUNK_CHARS] for j in range(0, len(text), CHUNK_CHARS)][:MAX_CHUNKS_PER_DOC]
+        for c in cs:
+            if len(c) > 200:
+                chunks.append(c)
+                owner.append(i)
+
+    champion: dict[int, tuple[float, str]] = {}
+    if chunks:
+        bm25 = BM25Okapi([_bm25_tokens(c, q_tokens) for c in chunks])
+        for c, i, s in zip(chunks, owner, bm25.get_scores(q_tokens)):
+            if i not in champion or s > champion[i][0]:
+                champion[i] = (float(s), c)
+
+    results = []
+    for i, d in enumerate(docs):
+        bm, champ = champion.get(i, (0.0, ""))
+        results.append({
+            "doc_id": d["DocumentNummer"],
+            "datum": str(d.get("Datum", ""))[:10],
+            "onderwerp": d.get("Onderwerp", ""),
+            "year_bucket": d.get("year_bucket", ""),
+            "bm25": round(bm, 2),
+            "champion": champ,
+            "score": 0,
+            "parties": [],
+            "n_parties": 0,
+            "chars": len(d.get("text", "")),
+            "party_excerpts": {},
+        })
+
+    triage = await _llm_triage(query, results)
+    if triage:
+        for r in results:
+            r["score"] = max(0, min(10, triage.get(r["doc_id"], 0))) * 10
+        results.sort(key=lambda r: (r["score"], r["bm25"]), reverse=True)
+        kept = [r for r in results if r["score"] >= 30][:MAX_RANKED_DEBATES]
+        if len(kept) < 3:
+            kept = results[:5]
+    else:
+        results.sort(key=lambda r: r["bm25"], reverse=True)
+        for rank, r in enumerate(results):
+            r["score"] = max(0, 90 - rank * 10)
+        kept = results[:MAX_RANKED_DEBATES]
+
+    by_id = {d["DocumentNummer"]: d for d in docs}
+    for r in kept:
+        text = by_id[r["doc_id"]].get("text", "")
+        r["parties"] = _detect_parties(text)
+        r["n_parties"] = len(r["parties"])
+        r["party_excerpts"] = _party_excerpts_local(text, r["parties"], q_tokens)
+    return kept
 
 
 async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
@@ -373,11 +524,11 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
         on_status(f"Searching Tweede Kamer records: *{', '.join(keywords[:5])}*")
 
     if year_buckets and len(year_buckets) > 1:
-        async def _bucket_search(b: dict) -> list[dict]:
+        async def _bucket_fetch(b: dict) -> list[dict]:
             try:
-                res = await _discover_odata_inner(
+                res = await _fetch_bucket_docs(
                     keywords=keywords, date_from=b["date_from"], date_to=b["date_to"],
-                    search_terms=search_terms, max_docs=MAX_ODATA_DOCS_PER_YEAR, excerpt_docs=ODATA_PARTY_EXCERPTS,
+                    max_docs=MAX_ODATA_DOCS_PER_YEAR,
                 )
                 for r in res:
                     r["year_bucket"] = b["year_label"]
@@ -389,17 +540,21 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
                 bucket_counts[b["year_label"]] = 0
                 return []
 
-        per_year = await asyncio.gather(*[_bucket_search(b) for b in year_buckets])
-        odata_results = [doc for batch in per_year for doc in batch]
+        per_year = await asyncio.gather(*[_bucket_fetch(b) for b in year_buckets])
+        raw_docs = [doc for batch in per_year for doc in batch]
     else:
-        odata_results = await _discover_odata_inner(
+        raw_docs = await _fetch_bucket_docs(
             keywords=keywords, date_from=date_from_full, date_to=date_to_full,
-            search_terms=search_terms,
         )
-        bucket_counts["all"] = len(odata_results)
+        bucket_counts["all"] = len(raw_docs)
 
-    odata_results.sort(key=lambda r: r["score"], reverse=True)
-    print(f"DEBUG_LOG: OData total {len(odata_results)} docs across {len(bucket_counts)} bucket(s)")
+    q_tokens = _query_tokens(search_terms, keywords)
+    if raw_docs and on_status:
+        on_status(f"Ranking {len(raw_docs)} debates (BM25 + LLM triage)...")
+    odata_results = await _rank_debates(state["query"], raw_docs, q_tokens) if raw_docs else []
+    if on_status:
+        on_status(f"Selected {len(odata_results)} debates")
+    print(f"DEBUG_LOG: OData {len(raw_docs)} docs fetched across {len(bucket_counts)} bucket(s), {len(odata_results)} kept after triage")
 
     # OpenTK content search (only if include_tk)
     opentk_docs = ""
@@ -459,7 +614,9 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
         "keywords_source": keywords_source,
         "keywords": keywords,
         "buckets": bucket_counts,
-        "total_odata_docs": len(odata_results),
+        "total_odata_docs": len(raw_docs),
+        "kept_after_triage": len(odata_results),
+        "triage_scores": {r["doc_id"]: r["score"] for r in odata_results},
         "opentk_docs_chars": len(opentk_docs),
         "duration_s": round(time.perf_counter() - t0, 1),
     }
@@ -509,11 +666,14 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
     # OData results (structured: per doc with scores, parties, excerpts)
     if odata_results:
         parts.append("Parliamentary debates found via official TK database:\n\n")
-        for doc in odata_results[:10]:
+        for doc in odata_results[:MAX_RANKED_DEBATES]:
             parts.append(
                 f"[{doc['doc_id']}] {doc['datum']} — {doc['onderwerp'][:100]} "
                 f"(relevance: {doc['score']}/100, {doc['n_parties']} parties)\n"
             )
+            champ = doc.get("champion", "")
+            if champ:
+                parts.append(f"  [most relevant passage]: {champ[:800]}\n")
             for party, snips in doc.get("party_excerpts", {}).items():
                 for snippet in snips[:2]:
                     parts.append(f"  [{party}]: {snippet}\n")
