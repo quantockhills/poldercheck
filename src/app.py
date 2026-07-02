@@ -308,6 +308,11 @@ _TOKEN = os.environ.get("ACCESS_TOKEN", "")
 if _TOKEN and st.query_params.get("token") != _TOKEN:
     st.stop()
 
+# Presentation mode: set PRESENTATION_MODE=1 in .env when hosting for visitors.
+# Forces the manifesto/CPB corpus off (server RAM cannot hold ChromaDB yet) and
+# shows an expectation-setting notice on the search screen.
+_PRESENTATION = os.environ.get("PRESENTATION_MODE", "").lower() in ("1", "true", "yes")
+
 @st.cache_resource
 def _static_corpus_available() -> bool:
     try:
@@ -459,7 +464,7 @@ with st.sidebar:
     )
     st.divider()
     st.markdown("**Sources**")
-    _manifesto_ready = _static_corpus_available()
+    _manifesto_ready = _static_corpus_available() and not _PRESENTATION
     include_manifestos = st.checkbox(
         "Party manifestos & CPB/PBL",
         value=_manifesto_ready,
@@ -547,6 +552,13 @@ def _search_thread(
 
 # ── search tab ────────────────────────────────────────────────────────────────
 with tab_search:
+    if _PRESENTATION:
+        st.info(
+            "Each run searches live through more than 13,500 Tweede Kamer debate transcripts "
+            "(2018 onwards) and nearly 1,300 CBS statistical datasets, so a full search takes "
+            "three to five minutes. Fast mode is being actively developed. To see high quality "
+            "examples that have already been run, open the History tab."
+        )
     with st.form("search_form", clear_on_submit=False):
         query = st.text_area(
             "Ask a question about Dutch politics or CBS data, or [learn more about the project](/about)",
