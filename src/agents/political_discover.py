@@ -24,12 +24,23 @@ from src.ingest.retrieve import format_for_prompt, retrieve_static
 _ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
 _MCP_BIN: str = ""
 
-MAX_ODATA_DOCS_PER_YEAR = 12
+MAX_ODATA_DOCS_PER_YEAR = 30
 MCP_PARALLEL = 8
 ODATA_EARLIEST_YEAR = 2018
 CHUNK_CHARS = 1500
 MAX_CHUNKS_PER_DOC = 60
 MAX_RANKED_DEBATES = 15
+TRIAGE_POOL = 40  # max candidates sent to the LLM triage call, pre-cut by BM25
+
+# All TK document types that are verbatim debate transcripts. 'Verslag van een
+# algemeen overleg' is the pre-2021 name for commissiedebat reports.
+DEBATE_SOORTEN = [
+    "Stenogram",
+    "Verslag van een commissiedebat",
+    "Verslag van een algemeen overleg",
+    "Verslag van een wetgevingsoverleg",
+    "Verslag van een notaoverleg",
+]
 
 
 def _init_mcp_bin():
@@ -278,12 +289,13 @@ async def _fetch_bucket_docs(
 ) -> list[dict]:
     """OData title search for one date bucket; downloads and extracts each doc's full text."""
     kw_filter = " or ".join(f"contains(tolower(Onderwerp),'{k}')" for k in keywords[:5])
+    soort_filter = " or ".join(f"Soort eq '{s}'" for s in DEBATE_SOORTEN)
     parts = [
         "Verwijderd eq false",
         f"Datum ge {date_from}",
         f"Datum le {date_to}",
         f"({kw_filter})",
-        "Soort eq 'Stenogram'",
+        f"({soort_filter})",
         "not contains(tolower(Onderwerp),'stemming')",
     ]
     odata_filter = " and ".join(parts)
@@ -457,7 +469,11 @@ async def _rank_debates(query: str, docs: list[dict], q_tokens: list[str]) -> li
             "party_excerpts": {},
         })
 
-    triage = await _llm_triage(query, results)
+    # Pre-cut by BM25 so the triage prompt stays bounded as candidate pools grow
+    results.sort(key=lambda r: r["bm25"], reverse=True)
+    triage_pool = results[:TRIAGE_POOL]
+
+    triage = await _llm_triage(query, triage_pool)
     if triage:
         for r in results:
             r["score"] = max(0, min(10, triage.get(r["doc_id"], 0))) * 10

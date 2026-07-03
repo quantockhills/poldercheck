@@ -554,8 +554,8 @@ def _search_thread(
 with tab_search:
     if _PRESENTATION:
         st.info(
-            "Each run searches live through more than 13,500 Tweede Kamer debate transcripts "
-            "(2018 onwards) and nearly 1,300 CBS statistical datasets, so a full search takes "
+            "Each run searches live through more than 16,500 Tweede Kamer debate transcripts "
+            "(2018 onwards, plenary and committee) and nearly 1,300 CBS statistical datasets, so a full search takes "
             "three to five minutes. Fast mode is being actively developed. To see high quality "
             "examples that have already been run, open the History tab."
         )
