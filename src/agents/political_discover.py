@@ -197,7 +197,7 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
     seen_terms = {t.strip() for t in terms_block.strip().split("\n") if t.strip()}
     odata_keywords = [
         w.strip().lower() for w in kw_block.strip().split("\n")
-        if w.strip() and w.strip().isalpha() and 4 <= len(w.strip()) <= 9
+        if w.strip() and w.strip().isalpha() and 3 <= len(w.strip()) <= 9
     ][:5]
 
     # Search static corpus
@@ -528,7 +528,7 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
         }
         keywords = list(dict.fromkeys(
             w for t in search_terms[:10] for w in t.lower().split()
-            if len(w) >= 5 and w.isalpha() and w not in _STOP
+            if len(w) >= 3 and w.isalpha() and w not in _STOP
         ))[:8]
         keywords_source = "fallback"
     print(f"DEBUG_LOG: search keywords ({keywords_source}): {keywords!r}")

@@ -55,6 +55,13 @@ Refresh the catalog JSONL with `python scripts/build_cbs_catalog.py` (hits the O
 
 **Important**: `src/ingest/retrieve.py` excludes `type == "manifesto"` (raw Manifesto CSV quasi-sentences). Agents only see `manifesto_pdf`, `cpb_analysis`, and `pbl_analysis` chunks.
 
+Note: manifesto/CPB/PBL corpus work is currently paused — the focus is on Tweede Kamer live search via OData + CBS data via DuckDB.
+
+## Issues and roadmap
+
+GitHub issues serve as both bug tracker and development roadmap. Labels: `enhancement`, `bug`, `quickfix`, `near-term`, `priority: high`, `potential improvement`.
+The README references specific issues as roadmap anchors (e.g. #8 critic agent, #21/#22 additional CPB/PBL reports). When making feature changes, check if there's a linked issue and reference the number in commits.
+
 ## Running and testing
 
 ```bash
@@ -68,7 +75,9 @@ ruff check src/ tests/                    # lint (line-length 120, N806 suppress
 python src/eval/run_eval.py               # RAGAS eval — costs LLM-judge calls; CI only on main
 ```
 
-Tests auto-load `.env` via `tests/conftest.py`. Langfuse tracing auto-enables when `LANGFUSE_PUBLIC_KEY` is set (`graph.py:_langfuse_callbacks`).
+Tests auto-load `.env` via `tests/conftest.py`. Langfuse tracing auto-enables when `LANGFUSE_PUBLIC_KEY` is set (`graph.py:_langfuse_callbacks`). Set `LANGFUSE_SECRET_KEY` and `LANGFUSE_HOST` (defaults to `cloud.langfuse.com`). Each graph run emits a full trace — useful for diagnosing slow nodes, tool calls, and CBS MCP responses.
+
+When working on LangChain/LangGraph code in this project, use the LangChain docs MCP (`docs.langchain.com/mcp`) for reference — it's configured in `~/.config/opencode/opencode.jsonc`.
 
 ## Architecture — full node walkthrough
 
