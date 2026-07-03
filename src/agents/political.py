@@ -1,4 +1,4 @@
-"""Political analyst agent: live Tweede Kamer search via OpenTK MCP + static ChromaDB retrieval."""
+"""Political analyst agent: live Tweede Kamer search via the OData API + static ChromaDB retrieval."""
 
 import asyncio
 from pathlib import Path
@@ -35,7 +35,10 @@ def _system_prompt(language: str) -> str:
     return date_preamble + _BASE_PROMPT + (_LANG_EN if language == "en" else _LANG_NL)
 
 
-OPENTK_NOT_FOUND = "No relevant recent parliamentary debates found via OpenTK for this query."
+TK_SEARCH_FAILED_NOTICE = (
+    "⚠️ Live parliamentary search failed due to a technical error — "
+    "Tweede Kamer debates were NOT searched for this answer."
+)
 
 
 def format_political_trace(trace: dict) -> str:
@@ -65,7 +68,6 @@ def format_political_trace(trace: dict) -> str:
         lines.append("    (no year buckets)")
     lines += [
         f"  Total OData docs   : {s.get('total_odata_docs', '?')}",
-        f"  OpenTK full-text   : {s.get('opentk_docs_chars', 0)} chars",
         "",
         f"SYNTHESIS  ({y.get('duration_s', '?')}s)",
         f"  OData docs in context  : {y.get('odata_docs_in_context', '?')}",
@@ -76,10 +78,9 @@ def format_political_trace(trace: dict) -> str:
     lines.append(f"\nTOTAL: {sum(durations):.1f}s")
     return "\n".join(lines)
 
-OPENTK_TIMEOUT_S = 300
-
-_ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
-_MCP_BIN = str(Path(__file__).parent.parent.parent / "docs" / "opentk-mcp" / "dist" / "index.js")
+# Generous outer net around the whole discover subgraph (plan + search + synthesize).
+# Not a working budget — only catches totally hung runs.
+DISCOVER_TIMEOUT_S = 1800
 
 
 async def run_political_analyst_v2(
@@ -94,14 +95,48 @@ async def run_political_analyst_v2(
     debug: bool = False,
 ) -> dict:
     """
-    Political analyst with live OpenTK MCP search + static ChromaDB retrieval.
+    Political analyst with live Tweede Kamer OData search + static ChromaDB retrieval.
 
-    Runs the iterative LangGraph discover subgraph (political_discover.py):
-    plan → search → synthesize. Falls back to static-only corpus on any failure.
+    Runs the LangGraph discover subgraph (political_discover.py):
+    plan → search (OData) → synthesize. Falls back to static-only corpus on any failure.
 
     include_manifestos: when False, static search covers only CPB/PBL (no party PDF manifesto chunks)
-    include_tk: when False, skips OpenTK live parliamentary search and uses only the static corpus
+    include_tk: when False, skips the live TK search entirely and answers from the static corpus
     """
+
+    async def _static_only(note: str, response_prefix: str = "") -> dict:
+        from langchain_openai import ChatOpenAI
+
+        static_passages = retrieve_static(query, include_manifestos=include_manifestos)
+        static_context = format_for_prompt(static_passages)
+
+        cfg = AGENT_CONFIGS["opentk_agent"]
+        if not cfg["model"]:
+            cfg = AGENT_CONFIGS["political_analyst"]
+
+        llm = ChatOpenAI(
+            base_url=cfg["base_url"],
+            api_key=cfg["api_key"],
+            model=cfg["model"],
+            timeout=600,
+            max_retries=1,
+        )
+        if callbacks:
+            llm = llm.with_config({"callbacks": callbacks})
+
+        response = await llm.ainvoke([
+            {"role": "system", "content": _system_prompt(language)},
+            {"role": "user", "content": f"Query: {query}\n\nStatic corpus:\n\n{static_context}\n\n{note}"},
+        ])
+        text = response.content if not response_prefix else f"{response_prefix}\n\n{response.content}"
+        return {"response": text, "passages": static_passages, "trace": {}}
+
+    if not include_tk:
+        return await _static_only(
+            "Note: live parliamentary search is disabled for this query, so parliamentary "
+            "debates were not searched. Answer only from the static corpus above and mention "
+            "that parliamentary debates were not part of this search."
+        )
 
     async def _run_iterative() -> dict:
         from src.agents.political_discover import build_political_discover_graph
@@ -111,7 +146,6 @@ async def run_political_analyst_v2(
             "query": query,
             "language": language,
             "include_manifestos": include_manifestos,
-            "include_tk": include_tk,
             "search_terms": [],
             "date_from": "",
             "date_to": "",
@@ -119,7 +153,6 @@ async def run_political_analyst_v2(
             "year_buckets": [],
             "odata_keywords": [],
             "odata_results": [],
-            "opentk_docs": "",
             "final_response": "",
             "coverage_note": "",
             "error": None,
@@ -145,37 +178,13 @@ async def run_political_analyst_v2(
         }
 
     try:
-        return await asyncio.wait_for(_run_iterative(), timeout=OPENTK_TIMEOUT_S)
+        return await asyncio.wait_for(_run_iterative(), timeout=DISCOVER_TIMEOUT_S)
     except Exception as exc:
-        print(f"DEBUG_LOG: OpenTK MCP unavailable, falling back to static-only: {exc}")
-        from langchain_openai import ChatOpenAI
-
-        static_passages = retrieve_static(query, include_manifestos=include_manifestos)
-        static_context = format_for_prompt(static_passages)
-
-        opentk_cfg = AGENT_CONFIGS["opentk_agent"]
-        if not opentk_cfg["model"]:
-            opentk_cfg = AGENT_CONFIGS["political_analyst"]
-
-        llm = ChatOpenAI(
-            base_url=opentk_cfg["base_url"],
-            api_key=opentk_cfg["api_key"],
-            model=opentk_cfg["model"],
-            max_tokens=opentk_cfg["max_tokens"],
-            timeout=45,
-            max_retries=1,
-        ).bind(parallel_tool_calls=True)
-        if callbacks:
-            llm = llm.with_config({"callbacks": callbacks})
-
-        response = await llm.ainvoke([
-            {"role": "system", "content": _system_prompt(language)},
-            {
-                "role": "user",
-                "content": (
-                    f"Query: {query}\n\nStatic corpus:\n\n{static_context}\n\n"
-                    f"Note: live parliamentary search is unavailable. {OPENTK_NOT_FOUND}"
-                ),
-            },
-        ])
-        return {"response": response.content, "passages": static_passages, "trace": {}}
+        print(f"DEBUG_LOG: TK discover subgraph failed ({type(exc).__name__}: {exc}), falling back to static-only")
+        return await _static_only(
+            "Note: the live Tweede Kamer search failed due to a technical error, so NO "
+            "parliamentary debates could be searched. Answer only from the static corpus "
+            "above. State clearly that parliamentary debates were not searched — do NOT "
+            "claim or imply that no relevant debates exist.",
+            response_prefix=TK_SEARCH_FAILED_NOTICE,
+        )

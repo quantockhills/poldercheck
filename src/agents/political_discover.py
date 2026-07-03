@@ -1,4 +1,4 @@
-"""LangGraph subgraph for political discover: term generation → OData+OpenTK search → synthesis.
+"""LangGraph subgraph for political discover: term generation → OData search → synthesis.
 
 Replaces the hand-rolled _run_discover loop in political.py with a proper LangGraph
 subgraph for automatic tracing, state management, and future Send-based fan-out.
@@ -8,7 +8,6 @@ import asyncio
 import io
 import json
 import re
-import subprocess
 import time
 import zipfile
 from typing import TypedDict
@@ -22,10 +21,9 @@ from src.agents.config import AGENT_CONFIGS
 from src.ingest.retrieve import format_for_prompt, retrieve_static
 
 _ODATA_BASE = "https://gegevensmagazijn.tweedekamer.nl/OData/v4/2.0"
-_MCP_BIN: str = ""
 
 MAX_ODATA_DOCS_PER_YEAR = 30
-MCP_PARALLEL = 8
+DOWNLOAD_PARALLEL = 8  # concurrent full-text downloads per OData bucket
 ODATA_EARLIEST_YEAR = 2018
 CHUNK_CHARS = 1500
 MAX_CHUNKS_PER_DOC = 60
@@ -43,16 +41,6 @@ DEBATE_SOORTEN = [
 ]
 
 
-def _init_mcp_bin():
-    from pathlib import Path
-
-    global _MCP_BIN
-    _MCP_BIN = str(Path(__file__).parent.parent.parent / "docs" / "opentk-mcp" / "dist" / "index.js")
-
-
-_init_mcp_bin()
-
-
 # ---------------------------------------------------------------------------
 # State
 # ---------------------------------------------------------------------------
@@ -61,7 +49,6 @@ class PoliticalDiscoverState(TypedDict):
     query: str
     language: str
     include_manifestos: bool
-    include_tk: bool
     # Plan outputs
     search_terms: list[str]
     odata_keywords: list[str]  # short Dutch root words for OData Onderwerp substring search
@@ -71,7 +58,6 @@ class PoliticalDiscoverState(TypedDict):
     year_buckets: list[dict]  # [{date_from, date_to, year_label}, ...] — created by plan
     # Search outputs
     odata_results: list[dict]  # ranked docs with party_excerpts
-    opentk_docs: str
     # Synthesis
     final_response: str
     coverage_note: str  # non-empty when query predates OData coverage
@@ -79,7 +65,7 @@ class PoliticalDiscoverState(TypedDict):
     # Debug / observability
     debug: bool
     plan_trace: dict    # timing + params from plan node
-    search_trace: dict  # per-bucket OData counts + MCP stats from search node
+    search_trace: dict  # per-bucket OData counts from search node
     synthesis_trace: dict  # context size + timing from synthesis node
 
 
@@ -163,8 +149,7 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         base_url=cfg["base_url"],
         api_key=cfg["api_key"],
         model=cfg["model"],
-        max_tokens=300,
-        timeout=30,
+        timeout=600,  # generous — only guards against totally hung requests
         max_retries=1,
     )
 
@@ -237,32 +222,8 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
 
 
 # ---------------------------------------------------------------------------
-# 2. Search node — OData by year (parallel via asyncio.gather) + OpenTK content
+# 2. Search node — OData by year (parallel via asyncio.gather)
 # ---------------------------------------------------------------------------
-
-async def _mcp_tool(tool: str, args: dict) -> dict | None:
-    """Call an OpenTK MCP tool via subprocess."""
-    proc = await asyncio.create_subprocess_exec(
-        "node",
-        _MCP_BIN,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-    )
-    req = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": tool, "arguments": args}})
-    try:
-        out, _ = await asyncio.wait_for(proc.communicate(input=(req + "\n").encode()), timeout=20)
-        data = json.loads(out.decode())
-        text = data["result"]["content"][0]["text"]
-        return json.loads(text)
-    except Exception:
-        return None
-    finally:
-        try:
-            proc.kill()
-        except Exception:
-            pass
-
 
 def _extract_text(blob: bytes) -> str:
     """Extract plain text from a TK document resource (PDF or DOCX)."""
@@ -310,7 +271,7 @@ async def _fetch_bucket_docs(
         if not docs:
             return []
 
-        sem = asyncio.Semaphore(MCP_PARALLEL)
+        sem = asyncio.Semaphore(DOWNLOAD_PARALLEL)
 
         async def _download(d: dict):
             async with sem:
@@ -399,7 +360,7 @@ async def _llm_triage(query: str, results: list[dict]) -> dict | None:
         cfg = AGENT_CONFIGS["political_analyst"]
     llm = ChatOpenAI(
         base_url=cfg["base_url"], api_key=cfg["api_key"], model=cfg["model"],
-        max_tokens=1200, timeout=60, max_retries=1,
+        timeout=600, max_retries=1,
     )
     lines = [
         f"{r['doc_id']} | {r['datum']} | {r['onderwerp'][:80]}\n  passage: {r['champion'][:900] or '(no text extracted)'}"
@@ -497,7 +458,7 @@ async def _rank_debates(query: str, docs: list[dict], q_tokens: list[str]) -> li
 
 
 async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
-    """OData discovery (parallel per year via asyncio.gather) + OpenTK content search."""
+    """OData discovery (parallel per year via asyncio.gather)."""
     t0 = time.perf_counter()
     debug = state.get("debug", False)
     on_status = None
@@ -506,7 +467,6 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
     search_terms = state.get("search_terms", [])
     date_from_full = state.get("date_from", "2020-01-01")
     date_to_full = state.get("date_to", "2026-01-01")
-    include_tk = state.get("include_tk", False)
     year_buckets = state.get("year_buckets", [])
 
     # Use explicit OData root keywords from plan node if available;
@@ -572,60 +532,6 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
         on_status(f"Selected {len(odata_results)} debates")
     print(f"DEBUG_LOG: OData {len(raw_docs)} docs fetched across {len(bucket_counts)} bucket(s), {len(odata_results)} kept after triage")
 
-    # OpenTK content search (only if include_tk)
-    opentk_docs = ""
-    if include_tk and search_terms:
-        sem = asyncio.Semaphore(MCP_PARALLEL)
-        candidate_docs: dict[str, dict] = {}
-
-        for term in search_terms[:10]:
-            if on_status:
-                on_status(f"Searching debates: *{term[:60]}*")
-            try:
-                result = await _mcp_tool(
-                    "search_tk_filtered",
-                    {"query": term, "type": "Document", "limit": 5, "format": "full"},
-                )
-                if not result:
-                    continue
-                result_text = result.get("text", "") if isinstance(result, dict) else ""
-                if not result_text:
-                    continue
-                doc_ids = list(dict.fromkeys(re.findall(r"\b\d{4}D\d+\b", str(result_text))))
-                for did in doc_ids:
-                    candidate_docs.setdefault(did, {"terms": set()})["terms"].add(term)
-            except Exception:
-                continue
-
-        if candidate_docs:
-            if on_status:
-                on_status(f"Checking relevance: {len(candidate_docs)} documents")
-            async def _analyze_tk(did: str):
-                async with sem:
-                    data = await _mcp_tool("analyze_document_relevance", {"docId": did, "searchTerms": search_terms[:5]})
-                    if data:
-                        return did, data.get("relevanceScore", 0), data.get("entities", {}).get("parties", [])
-                    return did, -1, []
-
-            tasks = [_analyze_tk(did) for did in list(candidate_docs.keys())[:15]]
-            scored = await asyncio.gather(*tasks)
-            for did, score, parties in scored:
-                candidate_docs[did]["score"] = score
-                candidate_docs[did]["parties"] = parties
-
-            sorted_docs = sorted(candidate_docs.items(), key=lambda x: x[1].get("score", -1), reverse=True)
-            top_ids = [did for did, _ in sorted_docs[:3]]
-            if top_ids:
-                async def _fetch(did: str):
-                    async with sem:
-                        d = await _mcp_tool("get_document_content", {"docId": did, "maxLength": 5000})
-                        return did, d.get("text", "") if d else ""
-                    return did, ""
-
-                contents = await asyncio.gather(*[_fetch(did) for did in top_ids])
-                blocks = [f"Document {did}:\n{text}" for did, text in contents if text]
-                opentk_docs = "\n\n---\n\n".join(blocks)
-
     search_trace = {
         "keywords_source": keywords_source,
         "keywords": keywords,
@@ -633,13 +539,12 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
         "total_odata_docs": len(raw_docs),
         "kept_after_triage": len(odata_results),
         "triage_scores": {r["doc_id"]: r["score"] for r in odata_results},
-        "opentk_docs_chars": len(opentk_docs),
         "duration_s": round(time.perf_counter() - t0, 1),
     }
     if debug:
         print(f"[TRACE] SEARCH: {search_trace}")
 
-    return {"odata_results": odata_results, "opentk_docs": opentk_docs, "error": None, "search_trace": search_trace}
+    return {"odata_results": odata_results, "error": None, "search_trace": search_trace}
 
 
 # ---------------------------------------------------------------------------
@@ -647,7 +552,7 @@ async def _search_node(state: PoliticalDiscoverState, config: RunnableConfig | N
 # ---------------------------------------------------------------------------
 
 async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
-    """Merge OData and OpenTK results, format for synthesis, call LLM."""
+    """Format ranked OData results for synthesis, call LLM."""
 
     from langchain_openai import ChatOpenAI
 
@@ -656,7 +561,6 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
     query = state["query"]
     language = state.get("language", "nl")
     odata_results = state.get("odata_results", [])
-    opentk_docs = state.get("opentk_docs", "")
     static_passages = state.get("static_passages", [])
 
     cfg = AGENT_CONFIGS.get("political_analyst")
@@ -664,8 +568,7 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
         base_url=cfg["base_url"],
         api_key=cfg["api_key"],
         model=cfg["model"],
-        max_tokens=cfg["max_tokens"],
-        timeout=120,
+        timeout=600,  # generous — only guards against totally hung requests
         max_retries=1,
     )
 
@@ -697,9 +600,6 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
     else:
         parts.append("No relevant parliamentary debates found in the official TK database.\n\n")
 
-    # OpenTK content
-    if opentk_docs:
-        parts.append(f"Parliamentary documents from Tweede Kamer:\n\n{opentk_docs}\n\n")
 
     # Date range hint
     date_from = state.get("date_from", "")
@@ -749,7 +649,6 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
     synthesis_trace = {
         "odata_docs_in_context": min(len(odata_results), 10),
         "static_passages_in_context": len(static_passages),
-        "opentk_docs_chars": len(opentk_docs),
         "context_chars": len(context_str),
         "duration_s": round(time.perf_counter() - t0, 1),
     }

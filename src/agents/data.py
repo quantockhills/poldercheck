@@ -446,8 +446,7 @@ async def _run_duckdb_parallel(
         base_url=worker_cfg["base_url"],
         api_key=worker_cfg["api_key"],
         model=worker_cfg["model"],
-        max_tokens=800,
-        timeout=45,
+        timeout=600,
         max_retries=1,
     )
 
@@ -666,8 +665,7 @@ async def run_data_analyst(
         base_url=cfg["base_url"],
         api_key=cfg["api_key"],
         model=cfg["model"],
-        max_tokens=cfg["max_tokens"],
-        timeout=60,
+        timeout=600,
         max_retries=1,
     )
     queries = cbs_queries if cbs_queries else [query]

@@ -12,8 +12,8 @@ from src.agents.config import AGENT_CONFIGS
 from src.agents.data import CBS_PROCESS_FAILED, run_data_analyst
 from src.agents.political import run_political_analyst_v2
 
-DATA_NODE_TIMEOUT_FAST_S = 300
-DATA_NODE_TIMEOUT_DEEP_S = 300
+DATA_NODE_TIMEOUT_FAST_S = 600
+DATA_NODE_TIMEOUT_DEEP_S = 600
 
 
 class PolderState(TypedDict):
@@ -22,7 +22,7 @@ class PolderState(TypedDict):
     mode: str  # "fast" | "deep"
     pedagogical: bool  # if True, synthesis explains Dutch terms inline
     include_manifestos: bool  # if False, static search uses only CPB/PBL (no party PDFs)
-    include_tk: bool  # if False, skips OpenTK live parliamentary search
+    include_tk: bool  # if False, skips the live Tweede Kamer (OData) search
     include_cbs: bool  # if False, skips CBS data node entirely
     cbs_mode: str  # "mcp" | "duckdb"
     num_datasets: int  # how many CBS datasets to query
@@ -41,7 +41,7 @@ async def query_planner_node(state: PolderState) -> dict:
         # Deep mode: CBS React agent searches for itself; no pre-generated terms needed
         return {"cbs_queries": []}
     cfg = AGENT_CONFIGS["data_analyst"]
-    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=15)
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=600)
     try:
         response = client.chat.completions.create(
             model=cfg["model"],
@@ -57,7 +57,6 @@ async def query_planner_node(state: PolderState) -> dict:
                     ),
                 }
             ],
-            max_tokens=60,
             extra_body={"thinking": {"type": "disabled"}},
         )
         raw = response.choices[0].message.content.strip()
@@ -70,7 +69,7 @@ async def query_planner_node(state: PolderState) -> dict:
 
 
 async def political_node(state: PolderState, config=None) -> dict:
-    """Political analyst node: static corpus + live OpenTK parliamentary search."""
+    """Political analyst node: static corpus + live Tweede Kamer (OData) search."""
     t0 = time.monotonic()
     on_status = None
     outer_callbacks: list = []
@@ -146,7 +145,7 @@ def synthesis_node(state: PolderState) -> dict:
     """Synthesis node : combines political and data responses."""
     t0 = time.monotonic()
     cfg = AGENT_CONFIGS["synthesis"]
-    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=600)
 
     lang = state.get("language", "nl")
     pedagogical = state.get("pedagogical", False)
@@ -214,7 +213,6 @@ Only note absence of information if a response contains truly nothing useful. Ne
     response = client.chat.completions.create(
         model=cfg["model"],
         messages=[{"role": "user", "content": prompt}],
-        max_tokens=cfg["max_tokens"],
         extra_body={"thinking": {"type": "enabled"}, "reasoning_effort": "high"},
     )
 

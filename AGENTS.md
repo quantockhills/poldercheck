@@ -9,7 +9,7 @@ AGENTS.md is gitignored — local-only context.
 
 - Python 3.12. `pytest.ini` sets `pythonpath = .`.
 - `requirements.txt` pins CPU-only PyTorch via `--extra-index-url https://download.pytorch.org/whl/cpu`. **Do not remove** this line — the CUDA wheel pulls ~6 GB of dead weight on CPU-only machines.
-- `chroma_db/` and `docs/opentk-mcp/` are gitignored; fresh clones must build both.
+- `chroma_db/` is gitignored; fresh clones must rebuild it.
 - `src/graph.py` is the entry point. `src/app.py` is the Streamlit UI.
 
 ## Environment setup
@@ -17,14 +17,7 @@ AGENTS.md is gitignored — local-only context.
 1. `python -m venv venv && source venv/bin/activate`
 2. `pip install -r requirements.txt`
 3. Copy `.env.example` to `.env` and fill keys.
-4. Clone and build OpenTK MCP server (needed for supplementary TK full-text search):
-
-   ```bash
-   git clone https://github.com/r-huijts/opentk-mcp docs/opentk-mcp
-   cd docs/opentk-mcp && npm install && npm run build
-   ```
-
-   Node must be in PATH. Without it, political analysis still works via the OData API — only the supplementary OpenTK full-text pass is skipped.
+4. (OpenTK MCP server no longer needed — the supplementary full-text pass was removed in July 2026; the OData API is the only TK search. `docs/opentk-mcp/` can be deleted.)
 
 ### Required env vars (see `src/agents/config.py`)
 
@@ -36,7 +29,7 @@ AGENTS.md is gitignored — local-only context.
 | `OPENROUTER_API_KEY` | For embeddings (`qwen/qwen3-embedding-8b` via OpenRouter); also falls back to `LLM_API_KEY` |
 | `MANIFESTO_API_KEY` | Free Manifesto Project API key |
 
-Optional per-agent overrides: `POLDERCHECK_POLITICAL_MODEL`, `POLDERCHECK_DATA_MODEL`, `POLDERCHECK_SYNTHESIS_MODEL`, plus matching `_BASE_URL` / `_API_KEY`. An `opentk_agent` config also exists for the political discover subgraph's triage LLM calls.
+Optional per-agent overrides: `POLDERCHECK_POLITICAL_MODEL`, `POLDERCHECK_DATA_MODEL`, `POLDERCHECK_SYNTHESIS_MODEL`, plus matching `_BASE_URL` / `_API_KEY`. An `opentk_agent` config also exists for the political discover subgraph's plan/triage LLM calls (legacy name — the OpenTK MCP itself was removed).
 
 Hosting-only: `ACCESS_TOKEN` (gates app behind `/?token=<value>`), `PRESENTATION_MODE=1` (disables manifesto corpus and shows notice).
 
@@ -87,7 +80,7 @@ LLM generates 5-7 Dutch CBS search terms from the query. Only runs in `mode="fas
 
 ### 2. political (`graph.py` → `src/agents/political.py` → `src/agents/political_discover.py`)
 
-Wraps a **political discover subgraph** with a 300s timeout. On timeout/exception, falls back to static-only LLM synthesis using the `political_analyst.txt` prompt.
+Wraps a **political discover subgraph** with a 1800s outer timeout (edge-case net only; per-LLM-call timeouts are 600s). On timeout/exception, falls back to static-only LLM synthesis using the `political_analyst.txt` prompt — the fallback response is prefixed with `TK_SEARCH_FAILED_NOTICE` so the UI never claims "no debates found" after a crash.
 
 The subgraph has three nodes:
 
@@ -97,15 +90,14 @@ The subgraph has three nodes:
 - Creates year buckets for parallel OData search
 - Searches ChromaDB static corpus (15 passages via `retrieve_static`)
 
-**2b. search (`_search_node`)**:
+**2b. search (`_search_node`)**: (runs only when `include_tk=True`; otherwise `political.py` answers static-only with an explicit 'debates not searched' note)
 - **OData primary search** — per-year-bucket parallel calls to `gegevensmagazijn.tweedekamer.nl/OData/v4/2.0/Document`, filtering on Onderwerp substring + 5 debate types + excluding stemming. Downloads full text (PDF/DOCX extraction) up to 30 docs/year.
 - **BM25 ranking** — chunked at 1,500 chars, compound-aware tokenizer (`vrouwenquotum` matches `quotum`), champion chunk per debate.
 - **LLM triage** — one call scores BM25 top-40 champion passages 0-10 against the query. Keeps top-15 debates.
 - **Party excerpt extraction** — purely local regex over full text (no MCP). Finds snippets around party name mentions, preferring those with query terms.
-- **OpenTK MCP supplementary search** — runs only when `include_tk=True`. Calls `search_tk_filtered` (up to 10 terms), `analyze_document_relevance` (up to 15 docs), `get_document_content` (top 3). Skips gracefully if MCP binary unavailable.
 
 **2c. synthesize (`_synthesize_node`)**:
-- Assembled prompt from static passages + OData ranked results (doc ID, date, champion passage, party excerpts) + OpenTK content + date range + coverage note
+- Assembled prompt from static passages + OData ranked results (doc ID, date, champion passage, party excerpts) + date range + coverage note
 - Uses its own system prompt (date-aware + language-aware), **not** the `political_analyst.txt` file
 - Output: a single response with `[DocumentID, Date]` citations
 
@@ -159,7 +151,7 @@ Current sidebar state:
 - **CBS datasets to query**: 1-10, default 5
 - **Pedagogical mode**: explains Dutch terms inline
 
-Two main tabs: Search (with live status polling + stop button) and History (past searches with delete).
+Two main tabs: Search (with live status polling + stop button) and History (past searches with delete). Stop works via real asyncio task cancellation in `_search_thread` (a watcher polls the stop event and cancels the graph task) — not via callback exceptions, which LangChain swallows.
 
 ### History and storage
 
@@ -180,9 +172,9 @@ CI runs `test_response_contract.py` on every push. RAGAS eval (`run_eval.py`) ru
 - **Embedding model mismatch**: `src/ingest/embed.py` header says `Qwen3-Embedding-0.6B`, but `EMBED_MODEL_ID` is actually `qwen/qwen3-embedding-8b`. Trust `EMBED_MODEL_ID`.
 - **Recency filter**: `retrieve_cbs_datasets` prefers datasets with `modified`/`period` >= 2015.
 - **Chunk.py is resumable**: uses `get_or_create_collection`, skips existing IDs.
-- **Synthesis uses thinking mode**: `reasoning_effort: "high"` + `thinking.type: "enabled"` — DeepSeek or Claude only.
-- **Political prompt file is fallback-only**: `political_analyst.txt` is only used in the static-only fallback path (`political.py:172`). The real political synthesis prompt is in `_synthesize_node`.
+- **Synthesis uses thinking mode**: `reasoning_effort: "high"` + `thinking.type: "enabled"` — DeepSeek or Claude only. No `max_tokens` caps anywhere (config `max_tokens` is None): reasoning models share the output budget with thinking tokens, and a 2000-token cap intermittently produced empty responses.
+- **Political prompt file is static-only**: `political_analyst.txt` is only used by `_static_only` in `political.py` — the include_tk=False branch and the crash fallback (which prefixes `TK_SEARCH_FAILED_NOTICE`). The real political synthesis prompt is in `_synthesize_node`.
 - **`_run_deep_duckdb` is dead code**: never called by the routing logic at `data.py:678`.
-- **OpenTK is supplementary**: the OData API is the primary search. OpenTK MCP adds full-text content for the top 3 matched docs. Party excerpts are entirely local.
-- **query_planner terms flow into political discover**: the `search_terms` generated by `_plan_node` are what feed both the BM25 ranking and the OpenTK search. The top-level `query_planner` just feeds the data node.
+- **OpenTK MCP removed (July 2026)**: the OData API is the only TK search. Party excerpts are entirely local. Node/npm no longer required.
+- **query_planner terms flow into political discover**: the `search_terms` generated by `_plan_node` feed the BM25 ranking. The top-level `query_planner` just feeds the data node.
 - **Tests need chroma_db**: `test_retrieve.py` skips gracefully if `chroma_db/` doesn't exist.

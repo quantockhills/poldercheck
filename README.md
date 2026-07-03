@@ -20,7 +20,7 @@ The personal motivation is simpler. I moved to the Netherlands for a PhD and dec
 
 Poldercheck is a bilingual assistant that lets you explore Dutch political debates and government data through natural language. It draws on four data sources:
 
-**Tweede Kamer debates (live):** real-time access to Dutch parliamentary proceedings via the OpenTK project. When parliament debates housing, nitrogen, AI, or immigration, the debates are searchable here. This is where you find what the challenges actually are, in the words of the people responsible for addressing them.
+**Tweede Kamer debates (live):** real-time access to Dutch parliamentary proceedings via the Tweede Kamer's open data API. When parliament debates housing, nitrogen, AI, or immigration, the debates are searchable here. This is where you find what the challenges actually are, in the words of the people responsible for addressing them.
 
 **CBS (Statistics Netherlands) data:** over 4,000 open datasets covering housing, demographics, labour market, energy, income inequality, health, and more. When a political claim connects to a number, this is where you check it.
 
@@ -91,7 +91,6 @@ query_planner node
 political node  ── political_discover subgraph ──────────────────────
     │   plan:    generate 15 Dutch search terms + extract date range   │
     │   search:  OData title search, 5 debate types, parallel per year │
-    │            + OpenTK full-text search (sequential per term)       │
     │   rank:    BM25 champion chunk per debate → LLM triage (0-10)    │
     │   synth:   merge findings → political analyst response           │
     │────────────────────────────────────────────────────────────────  │
@@ -120,7 +119,7 @@ with "show sources" toggle for full retrieved passages
 
 **The political node** has two retrieval paths:
 
-- **Live parliamentary search** via the Tweede Kamer's OData API (`gegevensmagazijn.tweedekamer.nl`) combined with the OpenTK MCP server (github.com/r-huijts/opentk-mcp). The OData layer searches debate titles using short Dutch root words (e.g. `migratie`, `asiel`) to find candidate debate transcripts: plenary stenograms plus committee, legislative and policy-note debate reports, up to 30 per year bucket, fetched in parallel per year. Each candidate's full text is then downloaded and ranked in two stages: BM25 over 1,500-character chunks picks each debate's best-matching passage (with compound-aware matching, so `vrouwenquotum` matches a `quotum` query), and a single LLM triage call scores those passages against the question to decide which debates reach synthesis. When the query specifies no date, the default window is the last five years; coverage starts at 2018. The full design rationale, including the ranking experiments it is based on, is documented in [docs/retrieval.md](docs/retrieval.md).
+- **Live parliamentary search** via the Tweede Kamer's OData API (`gegevensmagazijn.tweedekamer.nl`). It searches debate titles using short Dutch root words (e.g. `migratie`, `asiel`) to find candidate debate transcripts: plenary stenograms plus committee, legislative and policy-note debate reports, up to 30 per year bucket, fetched in parallel per year. Each candidate's full text is then downloaded and ranked in two stages: BM25 over 1,500-character chunks picks each debate's best-matching passage (with compound-aware matching, so `vrouwenquotum` matches a `quotum` query), and a single LLM triage call scores those passages against the question to decide which debates reach synthesis. When the query specifies no date, the default window is the last five years; coverage starts at 2018. The full design rationale, including the ranking experiments it is based on, is documented in [docs/retrieval.md](docs/retrieval.md).
 - **Static corpus search** via ChromaDB over text from the Manifesto Project API (party manifesto quasi-sentences, tagged by policy category) and CPB/PBL PDF reports. This runs on every query where the Party manifestos and CPB/PBL source is enabled in the sidebar (on by default), in parallel with the live parliamentary search. It also serves as the sole source if the live pipeline is unavailable.
 
 **The data node** retrieves CBS statistics without a live API connection. For each query it:
@@ -165,12 +164,12 @@ AGENT_CONFIGS = {
 }
 ```
 
-This is not just about model choice. By default, every query you type is sent to your configured LLM provider, and the retrieval agents call live APIs (OpenTK for parliamentary data, CBS for statistics). Third parties can log what you are asking about. For searches about politically sensitive topics, personal circumstances, or professional situations where you would rather not leave a trail, running your own model keeps the LLM calls entirely local. Point each agent to vLLM, Ollama, or any OpenAI-compatible server running on `localhost`, and the system behaves exactly as it would against a cloud API. The parliamentary and statistical data sources still need the internet (they have no local mirror), but your actual queries never leave your infrastructure.
+This is not just about model choice. By default, every query you type is sent to your configured LLM provider, and the retrieval agents call live APIs (the Tweede Kamer OData API for parliamentary data, CBS for statistics). Third parties can log what you are asking about. For searches about politically sensitive topics, personal circumstances, or professional situations where you would rather not leave a trail, running your own model keeps the LLM calls entirely local. Point each agent to vLLM, Ollama, or any OpenAI-compatible server running on `localhost`, and the system behaves exactly as it would against a cloud API. The parliamentary and statistical data sources still need the internet (they have no local mirror), but your actual queries never leave your infrastructure.
 
 **Full tech stack:**
 - Agent orchestration: LangGraph
 - LLM calls: `openai` Python SDK with configurable `base_url`
-- Live parliamentary data: `opentk-mcp` MCP server (Node/TypeScript, via npx)
+- Live parliamentary data: Tweede Kamer OData API (direct HTTPS, no extra runtime)
 - Static corpus: LangChain text splitters + ChromaDB + OpenRouter embeddings (Qwen3-Embedding-8B)
 - CBS data: DuckDB (in-memory) over CBS OData CSV downloads; ChromaDB catalog index for dataset discovery
 - Frontend: Streamlit (warm pastel design; approachable, not clinical)
@@ -185,7 +184,7 @@ All sources are free and open.
 
 | Source | What it covers | Format | How accessed |
 |---|---|---|---|
-| Tweede Kamer debates | Parliamentary proceedings, motions, voting records | Live API | OpenTK MCP server |
+| Tweede Kamer debates | Parliamentary proceedings, motions, voting records | Live API | Tweede Kamer OData API |
 | CBS StatLine | 4000+ statistical datasets (housing, economy, demographics, energy) | CSV via OData API → DuckDB in-memory | Dataset catalog in ChromaDB; CSVs fetched live |
 | Party manifestos | Full quasi-sentence-level coded manifesto text for all major Dutch parties, every election since 1945 | Manifesto Project API (structured, free) | ChromaDB |
 | CPB Charted Choices | Economic scoring of party manifestos, every election since 1986 | PDF (downloaded from cpb.nl) | ChromaDB |
@@ -197,7 +196,7 @@ All sources are free and open.
 
 ## Running locally
 
-**Prerequisites:** Python 3.12+, Node.js 18+ (for the OpenTK MCP server).
+**Prerequisites:** Python 3.12+.
 
 ```bash
 git clone https://github.com/quantockhills/poldercheck
@@ -253,7 +252,7 @@ Open `http://localhost:8501`. The sidebar has source toggles (Tweede Kamer, mani
 
 **Proof of concept** *(current)*
 
-Four-node LangGraph pipeline working end-to-end: query planner, political analyst (OData + OpenTK live search with year-bucket parallel retrieval + static corpus fallback), data analyst (DuckDB parallel workers with sub-topic decomposition), synthesis. Bilingual (EN/NL). Streamlit frontend with show/hide sources and pedagogical mode. RAGAS evaluation harness in place. Hetzner deployment in progress.
+Four-node LangGraph pipeline working end-to-end: query planner, political analyst (live OData search with year-bucket parallel retrieval + static corpus fallback), data analyst (DuckDB parallel workers with sub-topic decomposition), synthesis. Bilingual (EN/NL). Streamlit frontend with show/hide sources and pedagogical mode. RAGAS evaluation harness in place. Hetzner deployment in progress.
 
 **Public beta**
 

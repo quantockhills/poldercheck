@@ -53,20 +53,20 @@ API_KEY = _resolve_api_key()
 # ---------------------------------------------------------------------------
 
 
-def _agent_cfg(name: str, max_tokens: int) -> dict:
+def _agent_cfg(name: str, max_tokens: int | None = None) -> dict:
     prefix = f"POLDERCHECK_{name.upper()}"
     model = os.environ.get(f"{prefix}_MODEL") or os.environ.get("POLDERCHECK_MODEL") or ""
     return {
         "base_url": os.environ.get(f"{prefix}_BASE_URL", BASE_URL),
         "api_key": os.environ.get(f"{prefix}_API_KEY", API_KEY),
         "model": model,
-        "max_tokens": max_tokens,
+        "max_tokens": max_tokens,  # None = no cap; reasoning models share this budget with thinking tokens
     }
 
 
 AGENT_CONFIGS = {
-    "political_analyst": _agent_cfg("political", 800),
-    "opentk_agent": _agent_cfg("opentk", 800),  # tool-calling loop — use a fast model
-    "data_analyst": _agent_cfg("data", 600),
-    "synthesis": _agent_cfg("synthesis", 2000),
+    "political_analyst": _agent_cfg("political"),
+    "opentk_agent": _agent_cfg("opentk"),  # tool-calling loop — use a fast model
+    "data_analyst": _agent_cfg("data"),
+    "synthesis": _agent_cfg("synthesis"),
 }

@@ -13,18 +13,6 @@ from src.graph import run_query
 from src.storage import delete_conversation, load_history, save_conversation
 
 
-class _CancelCallback(BaseCallbackHandler):
-    """Raises StopIteration between nodes when the stop event is set."""
-
-    def __init__(self, stop_event: threading.Event):
-        super().__init__()
-        self._stop = stop_event
-
-    def on_chain_start(self, serialized, inputs, **kwargs):
-        if self._stop.is_set():
-            raise StopIteration("Search cancelled by user.")
-
-
 class _StatusCallback(BaseCallbackHandler):
     """Pipes LangGraph node and tool events to a Streamlit st.status container."""
 
@@ -35,10 +23,6 @@ class _StatusCallback(BaseCallbackHandler):
         "synthesis": "Synthesizing...",
     }
     _TOOL_LABELS = {
-        "search_tk": "Searching debates",
-        "search_by_category": "Searching debates",
-        "analyze_document_relevance": "Checking document",
-        "get_document_content": "Loading document",
         "search_manifesto_corpus": "Searching manifestos & policy reports",
         "search_cbs_catalog": "Searching CBS catalog",
         "fetch_cbs_dataset": "Fetching CBS dataset",
@@ -79,15 +63,7 @@ class _StatusCallback(BaseCallbackHandler):
                     args = ast.literal_eval(input_str)
                 except Exception:
                     pass
-        if name in ("search_tk", "search_by_category"):
-            q = args.get("query", "")
-            if q:
-                self._write(f"Searching for: *{q[:80]}*")
-        elif name == "analyze_document_relevance":
-            self._write(f"Checking relevance: {args.get('docId', '?')}")
-        elif name == "get_document_content":
-            self._write(f"Loading: {args.get('docId', '?')}")
-        elif name == "search_manifesto_corpus":
+        if name == "search_manifesto_corpus":
             q = args.get("query", "")
             if q:
                 self._write(f"Searching manifestos/CPB/PBL: *{q[:60]}*")
@@ -203,7 +179,7 @@ def _translate(text: str, target_lang: str) -> str:
     from src.agents.config import AGENT_CONFIGS
 
     cfg = AGENT_CONFIGS["synthesis"]
-    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=60)
+    client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=600)
     lang_name = "English" if target_lang == "en" else "Dutch"
     response = client.chat.completions.create(
         model=cfg["model"],
@@ -217,7 +193,6 @@ def _translate(text: str, target_lang: str) -> str:
                 ),
             }
         ],
-        max_tokens=1200,
         extra_body={"thinking": {"type": "disabled"}},
     )
     return response.choices[0].message.content
@@ -473,7 +448,7 @@ with st.sidebar:
     )
     if not _manifesto_ready:
         st.caption("Manifesto corpus: coming soon")
-    include_tk = st.checkbox("Tweede Kamer debates", value=True, help="Search live parliamentary debates via OpenTK (2018 onwards).")
+    include_tk = st.checkbox("Tweede Kamer debates", value=True, help="Search live parliamentary debates via the Tweede Kamer OData API (2018 onwards).")
     include_cbs = st.checkbox(
         "CBS statistical data", value=True, help="Fetch CBS StatLine data to support or challenge political claims.",
     )
@@ -516,29 +491,39 @@ for _k, _v in [
 def _search_thread(
     query, language, mode, pedagogical, include_manifestos, include_tk, include_cbs, cbs_mode, num_datasets, stop_event, msgs, out
 ):
+    async def _cancellable():
+        # Watch stop_event and cancel the whole graph run; cancellation propagates
+        # through every awaited LLM/HTTP call, actually aborting in-flight work.
+        task = asyncio.ensure_future(
+            run_query(
+                query,
+                language=language,
+                mode=mode,
+                pedagogical=pedagogical,
+                include_manifestos=include_manifestos,
+                include_tk=include_tk,
+                include_cbs=include_cbs,
+                cbs_mode=cbs_mode,
+                num_datasets=num_datasets,
+                on_status=msgs.append,
+                extra_callbacks=[_StatusCallback(msgs.append)],
+                debug=False,
+            )
+        )
+        while not task.done():
+            if stop_event.is_set():
+                task.cancel()
+                break
+            await asyncio.sleep(0.5)
+        return await task
+
     def _go():
         try:
             import time as _time
             _t0 = _time.time()
-            cb = _StatusCallback(msgs.append)
-            out["result"] = asyncio.run(
-                run_query(
-                    query,
-                    language=language,
-                    mode=mode,
-                    pedagogical=pedagogical,
-                    include_manifestos=include_manifestos,
-                    include_tk=include_tk,
-                    include_cbs=include_cbs,
-                    cbs_mode=cbs_mode,
-                    num_datasets=num_datasets,
-                    on_status=msgs.append,
-                    extra_callbacks=[_CancelCallback(stop_event), cb],
-                    debug=False,
-                )
-            )
+            out["result"] = asyncio.run(_cancellable())
             out["elapsed"] = int(_time.time() - _t0)
-        except StopIteration:
+        except asyncio.CancelledError:
             out["cancelled"] = True
         except Exception as exc:
             out["error"] = str(exc)
