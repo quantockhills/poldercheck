@@ -90,8 +90,9 @@ query_planner node
     ▼
 political node  ── political_discover subgraph ──────────────────────
     │   plan:    generate 15 Dutch search terms + extract date range   │
-    │   search:  OData discovery (parallel per year bucket)            │
+    │   search:  OData title search, 5 debate types, parallel per year │
     │            + OpenTK full-text search (sequential per term)       │
+    │   rank:    BM25 champion chunk per debate → LLM triage (0-10)    │
     │   synth:   merge findings → political analyst response           │
     │────────────────────────────────────────────────────────────────  │
     │   Static (toggleable): ChromaDB over Manifesto Project + CPB/PBL  │
@@ -137,7 +138,7 @@ A **critic agent** is on the roadmap for evaluative questions ("has party X kept
 
 **Context management**
 
-Retrieval is deliberately conservative. Per query: up to 12 parliamentary Stenogram documents per year bucket (10 carried into synthesis context), maximum 15 static corpus chunks (300–400 tokens each), up to 5 CBS datasets. Each agent only sees its own retrieved context, not the other's. The synthesis node receives structured summaries, not raw contexts.
+Retrieval is deliberately conservative. Per query: up to 30 debate transcripts per year bucket are fetched, ranked by BM25 champion chunk plus one LLM triage call, and at most 15 debates (each contributing one ~800-character passage plus party excerpts) reach the synthesis context. Static corpus: maximum 15 chunks (300–400 tokens each). CBS: up to 5 datasets. Each agent only sees its own retrieved context, not the other's. The synthesis node receives structured summaries, not raw contexts.
 
 **Bring your own model**
 
