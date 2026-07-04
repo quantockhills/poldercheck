@@ -225,11 +225,14 @@ Two optional settings for hosted deployments:
 # Gate the app behind a secret link: only /?token=<value> gets through
 ACCESS_TOKEN=your-secret-value
 
-# Presentation mode, for demo hosting: disables the manifesto/CPB corpus
-# (useful on low-RAM servers that cannot hold the ChromaDB index) and shows
-# a notice on the search screen explaining search scope and expected runtime
+# Presentation mode, for demo hosting: disables the manifesto/CPB pipeline
+# entirely (useful on low-RAM servers that cannot hold the ChromaDB index)
+# and shows a notice on the search screen explaining search scope and
+# expected runtime, with a link to the curated Examples page
 PRESENTATION_MODE=1
 ```
+
+Presentation mode is the way Poldercheck is demonstrated publicly. It tells visitors up front that every search runs live through more than 16,500 parliamentary debate transcripts and nearly 1,300 CBS datasets and therefore takes around five minutes, and it points them to an Examples page (`/examples`) with real questions that were run in advance, rendered exactly as a live search would be. A hosted web version runs in this mode behind an access token. If you would like access to it, contact [madhav22mohan@gmail.com](mailto:madhav22mohan@gmail.com).
 
 **Build the local indexes.** This runs once and populates the ChromaDB catalog used for CBS dataset discovery and the static political corpus.
 

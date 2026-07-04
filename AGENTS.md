@@ -31,7 +31,7 @@ AGENTS.md is gitignored — local-only context.
 
 Optional per-agent overrides: `POLDERCHECK_POLITICAL_MODEL`, `POLDERCHECK_DATA_MODEL`, `POLDERCHECK_SYNTHESIS_MODEL`, plus matching `_BASE_URL` / `_API_KEY`. An `opentk_agent` config also exists for the political discover subgraph's plan/triage LLM calls (legacy name — the OpenTK MCP itself was removed).
 
-Hosting-only: `ACCESS_TOKEN` (gates app behind `/?token=<value>`), `PRESENTATION_MODE=1` (disables manifesto corpus and shows notice).
+Hosting-only: `ACCESS_TOKEN` (gates app behind `/?token=<value>`), `PRESENTATION_MODE=1` (public demo mode: disables the manifesto pipeline entirely, shows a runtime notice on the search form, and links to the curated Examples page).
 
 ## Build the local corpus
 
@@ -153,9 +153,15 @@ Current sidebar state:
 
 Two main tabs: Search (with live status polling + stop button) and History (past searches with delete). Stop works via real asyncio task cancellation in `_search_thread` (a watcher polls the stop event and cancels the graph task) — not via callback exceptions, which LangChain swallows.
 
-### History and storage
+Shared rendering lives in `src/ui.py` (`render_result`, `inject_page_css`, party colors); it is used by `src/app.py` and by the standalone pages in `src/pages/` (`about.py`, `examples.py`) so saved conversations render identically everywhere.
+
+Presentation mode (`PRESENTATION_MODE=1`) is the public demo configuration. It forces the manifesto pipeline off (the checkbox is disabled and `include_manifestos` is hard-set to `False`, and the ChromaDB availability check is skipped entirely), and the search form shows a notice about search scope and the roughly five minute runtime, linking to `/examples`.
+
+### History, examples, and storage
 
 `src/storage.py`: conversations saved as JSON in `data/history/`. Each entry: query, settings, final_response, political_response, data_response, political_passages.
+
+The Examples page (`src/pages/examples.py`) renders curated conversations from `data/examples/` using the same JSON schema and the same `render_result` visuals as the History tab. To publish an example, copy its JSON file from `data/history/` into `data/examples/`.
 
 ## Response contract
 

@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 
 HISTORY_DIR = Path(__file__).parent.parent / "data" / "history"
+EXAMPLES_DIR = Path(__file__).parent.parent / "data" / "examples"
 
 
 def save_conversation(query: str, result: dict, settings: dict) -> str:
@@ -33,16 +34,29 @@ def save_conversation(query: str, result: dict, settings: dict) -> str:
     return conv_id
 
 
-def load_history() -> list[dict]:
-    if not HISTORY_DIR.exists():
+def _load_dir(directory: Path) -> list[dict]:
+    if not directory.exists():
         return []
     convos = []
-    for f in sorted(HISTORY_DIR.glob("*.json"), reverse=True):
+    for f in sorted(directory.glob("*.json"), reverse=True):
         try:
             convos.append(json.loads(f.read_text()))
         except Exception:
             pass
     return convos
+
+
+def load_history() -> list[dict]:
+    return _load_dir(HISTORY_DIR)
+
+
+def load_examples() -> list[dict]:
+    """Curated example conversations shown on the public Examples page.
+
+    Same JSON schema as history files. To publish an example, copy its JSON
+    file from data/history/ into data/examples/.
+    """
+    return _load_dir(EXAMPLES_DIR)
 
 
 def delete_conversation(conv_id: str) -> None:
