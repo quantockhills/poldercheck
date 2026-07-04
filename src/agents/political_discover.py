@@ -180,9 +180,12 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         terms_block, kw_block = raw, ""
 
     seen_terms = {t.strip() for t in terms_block.strip().split("\n") if t.strip()}
+    # Upper bound accommodates Dutch compounds (woningtekort, arbeidsmigratie) —
+    # they are highly specific title-substring matches; dropping them can leave
+    # only generic keywords and zero OData hits.
     odata_keywords = [
         w.strip().lower() for w in kw_block.strip().split("\n")
-        if w.strip() and w.strip().isalpha() and 3 <= len(w.strip()) <= 9
+        if w.strip() and w.strip().isalpha() and 3 <= len(w.strip()) <= 20
     ][:5]
 
     # Search static corpus
@@ -598,7 +601,12 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
                     parts.append(f"  [{party}]: {snippet}\n")
             parts.append("\n")
     else:
-        parts.append("No relevant parliamentary debates found in the official TK database.\n\n")
+        parts.append(
+            "No relevant parliamentary debates were found in the official TK database. "
+            "This means the search failed to locate records, NOT that parliament has not "
+            "debated the topic. Say that this search returned no records; never claim or "
+            "imply that the topic was not debated in parliament.\n\n"
+        )
 
 
     # Date range hint
@@ -626,6 +634,11 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
         f"flag sources older than 12 months as potentially outdated. "
         f"If the question asks about how views *evolved* over time, "
         f"older sources are evidence — cite their year but do not treat age as a limitation.\n\n"
+        "You are the political analyst in a two-agent pipeline: a separate data analyst "
+        "answers the statistical (CBS) side of the query. If the query also asks what data "
+        "or statistics show, cover only the parliamentary/political side. Do not state that "
+        "statistical data is missing or that part of the query cannot be answered — the "
+        "other agent handles it.\n\n"
     )
     if language == "en":
         sys_prompt += (

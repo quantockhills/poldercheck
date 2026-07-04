@@ -206,7 +206,7 @@ Write a single response that:
 - Is at most 300 words of prose (excluding the sources section)
 - Ends with a blank line then "## Sources" followed by a numbered list: "^1 Full source name, Date [ID]"
 
-Only note absence of information if a response contains truly nothing useful. Never open with a meta-comment about what the experts did or did not find.
+Only note absence of information if a response contains truly nothing useful. Never open with a meta-comment about what the experts did or did not find. If an expert reports that no records were found, treat that as a limitation of this search — never present it as evidence that parliament did not debate the topic or that the data does not exist.
 {ped_instruction}
 {lang_instruction}"""
 
