@@ -5,6 +5,12 @@ __pycache__/
 *.pyc
 data/static/*.pdf
 data/processed/
+data/chroma/
+data/history/
+docs/tkconv/
+1
+eval_case2_judge_log.txt
+eval_results.old.json
 eval_results.json
 .pytest_cache/
 deepseekinterim.txt
@@ -20,3 +26,5 @@ docs/langgraph/
 docs/portfolio-plan.md
 docs/pypdf.md
 docs/streamlit.md
+eval_artifacts.json
+eval_ab_synthesis.json

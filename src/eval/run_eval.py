@@ -5,7 +5,17 @@ raw evidence each run actually retrieved (DuckDB tool calls via a callback
 tap, TK documents via the political trace), then scores with RAGAS 0.4.x:
 
   faithfulness       -> response claims are grounded in the retrieved evidence
-  context_precision  -> the retrieved evidence was relevant to the query
+                        (graded against the FULL tool trace, incl. schema/label
+                        lookups — the judge needs those to decode measure IDs)
+  context_precision  -> the data-bearing evidence was relevant to the query
+                        (graded against a filtered trace: setup calls, schema
+                        exploration and failed queries excluded — an agent's
+                        chronological tool trace is not a ranked retriever, and
+                        scoring the raw trace just measures exploration noise).
+                        Thresholded only for TK-only cases, where retrieval IS
+                        a ranked doc list; report-only when CBS is involved,
+                        because the SQL agent legitimately cross-checks
+                        overlapping datasets and probes before pulling.
   answer_relevancy   -> response addresses the query (not thresholded on
                         refusal-type cases, where not answering is correct)
   rubric             -> per-case behavioural judgment driven by the case's
@@ -97,6 +107,37 @@ class ToolCaptureHandler(BaseCallbackHandler):
             if call["run_id"] == str(run_id) and call["output"] is None:
                 call["output"] = str(text)
                 break
+
+
+# Tool calls that locate/prepare data rather than retrieve it. Their outputs
+# (dataset IDs, dimension codes, measure labels) never support answer claims
+# directly, so they are excluded from the context_precision evidence list.
+_SETUP_TOOLS = {
+    "search_cbs_catalog",
+    "download_cbs_dataset",
+    "get_dimensions",
+    "get_dimension_values",
+    "get_cbs_measure_labels",
+}
+
+
+def is_data_evidence(call: dict) -> bool:
+    """True if a captured tool call retrieved actual data (vs setup/exploration).
+
+    run_sql counts only when it queried an *_Observations table and returned
+    rows — schema pokes (*_MeasureCodes, *_Dimensions, *Codes) and failed
+    queries are exploration, not evidence. Unknown tools with real output are
+    kept: better to over-include than silently drop evidence.
+    """
+    output = str(call.get("output") or "")
+    if call["name"] in _SETUP_TOOLS:
+        return False
+    if not output.strip() or output.startswith(("SQL error", "Failed")):
+        return False
+    if call["name"] == "run_sql":
+        sql = str(call["input"]).lower()
+        return "observations" in sql and "information_schema" not in sql
+    return True
 
 
 def build_contexts(result: dict, tool_calls: list[dict]) -> list[str]:
@@ -194,6 +235,10 @@ async def run_case(case: dict) -> dict:
         "expected_behaviour": case["expected_behaviour"],
         "response": response,
         "retrieved_contexts": build_contexts(result, handler.calls),
+        # Data-bearing subset for context_precision: setup/exploration calls
+        # stripped, TK docs and static passages kept (they are real evidence).
+        "evidence_contexts": build_contexts(
+            result, [c for c in handler.calls if is_data_evidence(c)]),
         "n_tool_calls": len(handler.calls),
         "contract_violations": check_response_contract(response),
     }
@@ -237,6 +282,7 @@ async def score_case(row: dict, judge, embeddings) -> dict:
     )
 
     q, resp, ctx = row["query"], row["response"], row["retrieved_contexts"]
+    evidence = row.get("evidence_contexts", ctx)
     scores: dict[str, float | None] = {}
     row["faithfulness_verdicts"] = None
 
@@ -256,8 +302,13 @@ async def score_case(row: dict, judge, embeddings) -> dict:
         except Exception as exc:
             print(f"  WARN faithfulness failed for case {row['case_id']}: {exc}")
             scores["faithfulness"] = None
-        await _safe("context_precision", ContextPrecisionWithoutReference(llm=judge).ascore(
-            user_input=q, response=resp, retrieved_contexts=ctx))
+        if evidence:
+            await _safe("context_precision", ContextPrecisionWithoutReference(llm=judge).ascore(
+                user_input=q, response=resp, retrieved_contexts=evidence))
+        else:
+            scores["context_precision"] = None
+            print(f"  NOTE case {row['case_id']}: no data-bearing evidence among "
+                  f"{len(ctx)} contexts — context_precision skipped")
     else:
         # No evidence retrieved: nothing to grade grounding against. Contract +
         # rubric decide whether an empty-retrieval response was handled honestly.
@@ -280,6 +331,12 @@ def check_thresholds(rows: list[dict]) -> list[str]:
         for metric, threshold in THRESHOLDS.items():
             if metric == "answer_relevancy" and row["type"] in ("refusal", "absence"):
                 continue  # correctly refusing / reporting absence legitimately does not answer
+            if metric == "context_precision" and "cbs" in row["sources"]:
+                # Report-only for CBS cases: the SQL agent explores overlapping
+                # datasets and probes before pulling, which is healthy agent
+                # behaviour but reads as noise to a ranked-retrieval metric.
+                # TK-only cases keep the gate — BM25+triage IS a ranked retriever.
+                continue
             value = row["scores"].get(metric)
             if value is not None and value < threshold:
                 breaches.append(
@@ -333,7 +390,8 @@ async def main_async(case_ids: list[int] | None, gate: bool) -> int:
         print(f"\n=== Case {case['case_id']}: {case['query']} (sources: {case.get('sources', ['tk', 'cbs'])})")
         row = await run_case(case)
         print(f"  graph done — {row['n_tool_calls']} tool calls, "
-              f"{len(row['retrieved_contexts'])} context blocks, "
+              f"{len(row['retrieved_contexts'])} context blocks "
+              f"({len(row['evidence_contexts'])} data-bearing), "
               f"{len(row['response'].split())} words")
         row["scores"] = await score_case(row, judge, embeddings)
         print(f"  scores: {row['scores']}")
@@ -347,7 +405,10 @@ async def main_async(case_ids: list[int] | None, gate: bool) -> int:
             "case_id", "query", "type", "sources", "scores",
             "contract_violations", "n_tool_calls", "response",
         )}
-        | {"n_contexts": len(row["retrieved_contexts"])}
+        | {
+            "n_contexts": len(row["retrieved_contexts"]),
+            "n_evidence_contexts": len(row["evidence_contexts"]),
+        }
         for row in rows
     ]
     merged: dict[int, dict] = {}
@@ -385,6 +446,7 @@ async def main_async(case_ids: list[int] | None, gate: bool) -> int:
         artifacts[str(r["case_id"])] = {
             "response": r["response"],
             "retrieved_contexts": r["retrieved_contexts"],
+            "evidence_contexts": r["evidence_contexts"],
             "faithfulness_verdicts": r.get("faithfulness_verdicts"),
         }
     ARTIFACTS_FILE.write_text(json.dumps(artifacts, indent=2, ensure_ascii=False))

@@ -73,31 +73,27 @@ class PoliticalDiscoverState(TypedDict):
 # 1. Plan node — generate terms, detect date range, search static corpus
 # ---------------------------------------------------------------------------
 
-async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
-    """Generate Dutch search terms from the query, extract date range, search static corpus."""
-    from langchain_openai import ChatOpenAI
+# Open-ended "since X" anchors: date_to = today. Tolerates a few filler words
+# between anchor and year ("since the November 2023 election", "sinds de
+# verkiezingen van 2023") — requiring adjacency silently downgraded these to
+# single-year queries, truncating retrieval at the anchor year's end.
+_SINCE_PAT = re.compile(
+    r"\b(?:since|vanaf|sinds|na|after|from)\s+(?:[\w'-]+\s+){0,3}?(20[0-9]{2})\b",
+    re.IGNORECASE,
+)
 
-    t0 = time.perf_counter()
-    debug = state.get("debug", False)
-    on_status = None
-    if config:
-        on_status = (config.get("configurable") or {}).get("on_status")
-    query = state["query"]
-    include_manifestos = state.get("include_manifestos", False)
 
-    # Extract date range from query
-    from datetime import date as _date
-    today = _date.today()
+def parse_date_range(query: str, today) -> tuple[str, str, str, list[dict]]:
+    """Extract the OData search window from the query text.
+
+    Returns (date_from, date_to, coverage_note, year_buckets). Pure function
+    of (query, today) so the anchor heuristics are unit-testable.
+    """
     today_str = today.strftime("%Y-%m-%d")
     today_year = today.year
 
     years = sorted(set(int(y) for y in re.findall(r"\b(20[0-9]{2})\b", query) if 2000 <= int(y) <= 2030))
-
-    # Detect open-ended "since X" / "vanaf X" / "sindsX" anchors — date_to = today
-    _since_pat = re.compile(
-        r"\b(?:since|vanaf|sinds|na|after|from)\s+(20[0-9]{2})\b", re.IGNORECASE
-    )
-    _since_match = _since_pat.search(query)
+    _since_match = _SINCE_PAT.search(query)
 
     if _since_match:
         anchor = int(_since_match.group(1))
@@ -136,12 +132,34 @@ async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | Non
         bucket_start = today_year - 4  # no date anchor — default to last 5 years
 
     if bucket_start is not None:
-        for y in range(bucket_start, today_year + 1):
+        # Clamp to the requested end year — an explicit "2019 … 2024" range
+        # must not spill buckets past 2024 into the present.
+        bucket_end = min(today_year, int(date_to[:4]))
+        for y in range(bucket_start, bucket_end + 1):
             year_buckets.append({
                 "date_from": f"{y}-01-01",
                 "date_to": f"{y}-12-31",
                 "year_label": str(y),
             })
+
+    return date_from, date_to, coverage_note, year_buckets
+
+
+async def _plan_node(state: PoliticalDiscoverState, config: RunnableConfig | None = None) -> dict:
+    """Generate Dutch search terms from the query, extract date range, search static corpus."""
+    from langchain_openai import ChatOpenAI
+
+    t0 = time.perf_counter()
+    debug = state.get("debug", False)
+    on_status = None
+    if config:
+        on_status = (config.get("configurable") or {}).get("on_status")
+    query = state["query"]
+    include_manifestos = state.get("include_manifestos", False)
+
+    # Extract date range from query
+    from datetime import date as _date
+    date_from, date_to, coverage_note, year_buckets = parse_date_range(query, _date.today())
 
     # LLM setup
     cfg = AGENT_CONFIGS.get("opentk_agent") or AGENT_CONFIGS["political_analyst"]
@@ -639,6 +657,13 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
         "or statistics show, cover only the parliamentary/political side. Do not state that "
         "statistical data is missing or that part of the query cannot be answered — the "
         "other agent handles it.\n\n"
+        "GROUNDING: you see short excerpts, not full debates — write only what the excerpts support.\n"
+        "- Attribute every quote and position to exactly the party labelled on the excerpt, never to another party or speaker\n"
+        "- Use only the qualifiers the excerpt itself contains: never add motives, conditions, "
+        "or absolutes ('all', 'only', 'consistently') to sharpen a position\n"
+        "- Describe change over time concretely — what was said, by whom, when — rather than "
+        "imposing narrative frames ('two phases', 'a U-turn', 'the centre of gravity shifted') "
+        "that no source states\n\n"
     )
     if language == "en":
         sys_prompt += (

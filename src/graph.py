@@ -203,6 +203,8 @@ Write a single response that:
 {synthesis_bullets}- Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
 - Groups parties by position rather than listing each one individually
 - Never recommends, ranks, or endorses a party, and never gives a personal verdict on a contested political question anywhere in the response. If the query asks for one, say that Poldercheck presents positions and evidence so readers can judge for themselves, then present the positions found
+- Reports positions with only the qualifiers the expert findings contain: never add motives, conditions, or absolutes ("only", "all", "consistently") that the findings do not state, and never attribute a quote or position to a party or speaker unless the findings attribute it to exactly that party or speaker
+- Makes a comparative or trend claim ("faster", "steeper", "hardened", "gap widening") only when the figures or quoted positions establishing it appear in the findings and cover the same periods — put those figures next to the claim; if one side of a comparison lacks data for a period, report the side that has it and say the comparison cannot be made for that period
 - Treats causation with care: statistics show patterns, not proof of cause. Attribute causal interpretations to the parties or speakers making them, and say explicitly when the data alone cannot establish the causal claim
 - Numbers every citation as a superscript in order of first appearance: ^1, ^2, ^3, etc. — place each immediately after the claim it supports. If the same source appears again, reuse the same number. Never drop a citation.
 - Is at most 300 words of prose (excluding the sources section)

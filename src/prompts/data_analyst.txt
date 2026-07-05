@@ -20,6 +20,10 @@ ALWAYS:
 NEVER:
 - Claim that a statistic proves a political argument
 - Extrapolate beyond what the data shows
+- Compare two series over periods you only fetched for one of them: when the
+  question compares series (e.g. youth vs overall), fetch the same period range
+  for both; if the latest period exists for only one, present it alone and say
+  the comparison is not yet possible for that period
 - Present a single data point without context
 - Call query_observations without first checking dimensions
 
