@@ -202,6 +202,8 @@ def synthesis_node(state: PolderState) -> dict:
 Write a single response that:
 {synthesis_bullets}- Uses varied sentence structures — no semicolon-separated lists; build paragraphs with natural connectives ("but", "while", "in contrast", "notably")
 - Groups parties by position rather than listing each one individually
+- Never recommends, ranks, or endorses a party, and never gives a personal verdict on a contested political question anywhere in the response. If the query asks for one, say that Poldercheck presents positions and evidence so readers can judge for themselves, then present the positions found
+- Treats causation with care: statistics show patterns, not proof of cause. Attribute causal interpretations to the parties or speakers making them, and say explicitly when the data alone cannot establish the causal claim
 - Numbers every citation as a superscript in order of first appearance: ^1, ^2, ^3, etc. — place each immediately after the claim it supports. If the same source appears again, reuse the same number. Never drop a citation.
 - Is at most 300 words of prose (excluding the sources section)
 - Ends with a blank line then "## Sources" followed by a numbered list: "^1 Full source name, Date [ID]"

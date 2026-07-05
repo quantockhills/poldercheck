@@ -2,7 +2,9 @@
 
 import re
 
-CITATION_PATTERN = re.compile(r"\^\d+")
+# Accept ASCII footnote citations (^1) and Unicode superscript digits (¹ ² ³),
+# which models emit interchangeably for the same footnote instruction.
+CITATION_PATTERN = re.compile(r"\^\d+|[⁰¹²³⁴-⁹]")
 NOT_FOUND_SENTENCE = "I did not find relevant information"
 CBS_NOT_FOUND_SENTENCE = "I could not find a CBS dataset"
 CBS_FAILED_SENTENCE = "The CBS data retrieval process failed"

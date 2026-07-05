@@ -174,6 +174,18 @@ async def run_political_analyst_v2(
                 "plan": result.get("plan_trace", {}),
                 "search": result.get("search_trace", {}),
                 "synthesis": result.get("synthesis_trace", {}),
+                # Raw retrieved TK evidence, carried along for eval/debugging only —
+                # nothing in the pipeline reads this key.
+                "odata_docs": [
+                    {
+                        "doc_id": d.get("doc_id", ""),
+                        "datum": d.get("datum", ""),
+                        "onderwerp": d.get("onderwerp", ""),
+                        "champion": d.get("champion", ""),
+                        "party_excerpts": d.get("party_excerpts", {}),
+                    }
+                    for d in result.get("odata_results", [])
+                ],
             },
         }
 
