@@ -267,12 +267,12 @@ with tab_search:
     with st.form("search_form", clear_on_submit=False):
         if _PRESENTATION:
             st.markdown(_SEARCH_LABEL)
+            st.markdown("Or [click here to see examples of real questions we ran ourselves](/examples).")
             st.caption(
                 "Because every search runs live through more than 16,500 Tweede Kamer debate "
                 "transcripts (2018 onwards, plenary and committee) and analyses statistics from "
                 "nearly 1,300 CBS datasets, the process can take around five minutes. A fast mode "
-                "is coming soon. If you would rather not wait, you can browse "
-                "[examples of real questions that we ran ourselves](/examples)."
+                "is coming soon."
             )
             query = st.text_area(
                 _SEARCH_LABEL,
@@ -384,6 +384,7 @@ with tab_history:
             header = f"{ts} · {lang_label} · {q[:70]}"
 
             with st.expander(header):
+                st.markdown(f"**{q}**")
                 col_info, col_del = st.columns([9, 1])
                 with col_info:
                     tags = []

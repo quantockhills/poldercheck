@@ -34,3 +34,13 @@ def test_overlong_response_fails():
     response = "word " * 400 + "^1"
     violations = check_response_contract(response)
     assert any("word budget" in v for v in violations)
+
+
+def test_sources_section_does_not_count_against_word_budget():
+    # A heavily-cited answer must not breach the budget through its source
+    # list alone: 300 words of prose + a 100-word sources section passes.
+    response = (
+        "word " * 300 + "^1\n\n## Sources\n"
+        + "\n".join(f"^{i} Some Long Debate Title, 2026-01-0{i % 9 + 1} [2026D{i:05d}]" for i in range(1, 17))
+    )
+    assert check_response_contract(response) == []

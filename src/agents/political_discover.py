@@ -10,6 +10,7 @@ import json
 import re
 import time
 import zipfile
+from datetime import timedelta
 from typing import TypedDict
 from urllib.parse import quote
 
@@ -82,6 +83,19 @@ _SINCE_PAT = re.compile(
     re.IGNORECASE,
 )
 
+# Relative-recency phrases with no explicit year ("de afgelopen maanden",
+# "recent months"): a trailing 12-month window. Without this branch such
+# queries fall through to the 5-year default, and topical ranking then
+# surfaces years-old debates for a question about the past months.
+# Deliberately excludes "recent years"/"afgelopen jaren" — multi-year
+# recency is what the 5-year default already models.
+_RECENT_PAT = re.compile(
+    r"\b(?:afgelopen|laatste|voorbije|recente?|past|last)\s+"
+    r"(?:paar\s+|few\s+|couple\s+of\s+)?(?:maanden|weken|months|weeks)\b"
+    r"|\b(?:recentelijk|onlangs|recently|lately)\b",
+    re.IGNORECASE,
+)
+
 
 def parse_date_range(query: str, today) -> tuple[str, str, str, list[dict]]:
     """Extract the OData search window from the query text.
@@ -94,6 +108,9 @@ def parse_date_range(query: str, today) -> tuple[str, str, str, list[dict]]:
 
     years = sorted(set(int(y) for y in re.findall(r"\b(20[0-9]{2})\b", query) if 2000 <= int(y) <= 2030))
     _since_match = _SINCE_PAT.search(query)
+    # Explicit years always outrank recency wording — "compared to 2021" fixes
+    # the window even if the query also says "the last few months".
+    _recent_match = None if (_since_match or years) else _RECENT_PAT.search(query)
 
     if _since_match:
         anchor = int(_since_match.group(1))
@@ -105,6 +122,9 @@ def parse_date_range(query: str, today) -> tuple[str, str, str, list[dict]]:
     elif years:
         date_from = f"{years[0]}-01-01"
         date_to = f"{years[0] + 1}-01-01"
+    elif _recent_match:
+        date_from = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+        date_to = today_str
     else:
         date_from = f"{today_year - 4}-01-01"
         date_to = today_str
@@ -128,6 +148,8 @@ def parse_date_range(query: str, today) -> tuple[str, str, str, list[dict]]:
         bucket_start = max(years[0], ODATA_EARLIEST_YEAR)
     elif years:
         bucket_start = None  # single-year query — no buckets needed
+    elif _recent_match:
+        bucket_start = None  # 12-month window — one search, no year fan-out
     else:
         bucket_start = today_year - 4  # no date anchor — default to last 5 years
 
@@ -663,7 +685,10 @@ async def _synthesize_node(state: PoliticalDiscoverState, config: RunnableConfig
         "or absolutes ('all', 'only', 'consistently') to sharpen a position\n"
         "- Describe change over time concretely — what was said, by whom, when — rather than "
         "imposing narrative frames ('two phases', 'a U-turn', 'the centre of gravity shifted') "
-        "that no source states\n\n"
+        "that no source states\n"
+        "- Attribute a motion to the members the chair names as its proposers "
+        "('Deze motie is voorgesteld door de leden …'), never to the party in the excerpt's "
+        "label or to other speakers appearing nearby in the same excerpt\n\n"
     )
     if language == "en":
         sys_prompt += (

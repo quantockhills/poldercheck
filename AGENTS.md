@@ -1,7 +1,8 @@
 # Poldercheck — Agent Notes
 
 Compact developer reference. For the public overview see `README.md`.
-AGENTS.md is gitignored — local-only context.
+AGENTS.md is gitignored — local-only context. Interview prep materials
+(e.g. `interview-examples.md`) are also local-only; do not commit.
 
 ---
 

@@ -54,7 +54,7 @@ EVAL_SET = Path(__file__).parent / "eval_set.jsonl"
 RESULTS_FILE = Path("eval_results.json")
 ARTIFACTS_FILE = Path("eval_artifacts.json")  # full captured contexts, for re-scoring
 
-JUDGE_MODEL = "anthropic/claude-sonnet-4-6"
+JUDGE_MODEL_DEFAULT = "deepseek-v4-pro"
 EMBED_MODEL = "qwen/qwen3-embedding-8b"
 OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
@@ -379,11 +379,16 @@ async def main_async(case_ids: list[int] | None, gate: bool) -> int:
         print("No cases to run.")
         return 1
 
-    client = AsyncOpenAI(base_url=OPENROUTER_BASE, api_key=os.environ["OPENROUTER_API_KEY"])
+    judge_model = os.environ.get("POLDERCHECK_MODEL") or JUDGE_MODEL_DEFAULT
+    judge_base = os.environ.get("LLM_BASE_URL") or "https://api.deepseek.com"
+    judge_key = os.environ.get("LLM_API_KEY") or os.environ.get("OPENROUTER_API_KEY") or ""
+
+    judge_client = AsyncOpenAI(base_url=judge_base, api_key=judge_key)
+    embed_client = AsyncOpenAI(base_url=OPENROUTER_BASE, api_key=os.environ["OPENROUTER_API_KEY"])
     # Large output budget: faithfulness enumerates a verdict per claim, and with
     # 50+ captured tool contexts the default 2-3k cap truncates the judge's JSON.
-    judge = llm_factory(JUDGE_MODEL, client=client, max_tokens=16000)
-    embeddings = OpenAIEmbeddings(client=client, model=EMBED_MODEL)
+    judge = llm_factory(judge_model, client=judge_client, max_tokens=16000)
+    embeddings = OpenAIEmbeddings(client=embed_client, model=EMBED_MODEL)
 
     rows = []
     for case in cases:
@@ -426,7 +431,7 @@ async def main_async(case_ids: list[int] | None, gate: bool) -> int:
     aggregates = aggregate(all_records)
 
     output = {
-        "judge_model": JUDGE_MODEL,
+        "judge_model": judge_model,
         "n_cases": len(all_records),
         "aggregates": aggregates,
         "thresholds": THRESHOLDS,

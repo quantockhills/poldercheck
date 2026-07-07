@@ -291,3 +291,26 @@ def inject_page_css():
 """,
         unsafe_allow_html=True,
     )
+
+
+def inject_frosted_main() -> None:
+    """Frost the page's main content area, matching the History tab's look.
+
+    The main app gets its frosting from the tab-panel rules in
+    inject_page_css; standalone pages (Examples) have no tabs, so without
+    this their content sits straight on the background image.
+    """
+    st.markdown(
+        """
+<style>
+    section.main div.block-container,
+    div[data-testid="stMainBlockContainer"] {
+        background-color: rgba(248, 244, 240, 0.88) !important;
+        backdrop-filter: blur(6px) !important;
+        -webkit-backdrop-filter: blur(6px) !important;
+        padding: 4.5rem 2rem 2rem !important;
+    }
+</style>
+""",
+        unsafe_allow_html=True,
+    )

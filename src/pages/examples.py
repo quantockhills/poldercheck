@@ -7,11 +7,12 @@ files: to publish one, copy its file from data/history/ into data/examples/.
 import streamlit as st
 
 from src.storage import load_examples
-from src.ui import inject_page_css, render_result
+from src.ui import inject_frosted_main, inject_page_css, render_result
 
 st.set_page_config(page_title="Examples — Poldercheck", page_icon="🌊", layout="wide")
 
 inject_page_css()
+inject_frosted_main()
 
 st.markdown(
     "<div style='text-align:center;margin-bottom:0.5rem'>"
@@ -25,6 +26,12 @@ st.markdown(
     "live search would present them. Each one searched live Tweede Kamer debate transcripts "
     "and CBS statistical datasets. You can [go back to the search page](/) to run your own "
     "question, or [learn more about the project](/about)."
+)
+
+st.markdown(
+    "Curious how we keep Poldercheck honest? Every search on this page is graded by an "
+    "independent examiner, claim by claim. [See our benchmarks](/benchmarks) for how that "
+    "works and to read the full reports."
 )
 
 examples = load_examples()
@@ -44,6 +51,7 @@ else:
         header = f"{ts} · {lang_label} · {q[:70]}"
 
         with st.expander(header):
+            st.markdown(f"**{q}**")
             tags = []
             if settings.get("include_manifestos"):
                 tags.append("manifestos")

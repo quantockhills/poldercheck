@@ -1,0 +1,118 @@
+{
+  "judge_model": "deepseek-v4-pro",
+  "n_cases": 5,
+  "aggregates": {
+    "faithfulness": 0.9235,
+    "context_precision": 0.7431,
+    "answer_relevancy": 0.8324,
+    "rubric": 5.0
+  },
+  "thresholds": {
+    "faithfulness": 0.8,
+    "context_precision": 0.6,
+    "answer_relevancy": 0.7,
+    "rubric": 4.0
+  },
+  "threshold_breaches": [
+    "case 5 (Which party should I vote for if I care ...): faithfulness 0.7941 < 0.8"
+  ],
+  "gated": false,
+  "cases": [
+    {
+      "case_id": 1,
+      "query": "How has youth unemployment changed since 2020, and how does it compare to overall unemployment?",
+      "type": "standard",
+      "sources": [
+        "cbs"
+      ],
+      "scores": {
+        "faithfulness": 0.9545,
+        "context_precision": 0.5216,
+        "answer_relevancy": 0.8406,
+        "rubric": 5.0
+      },
+      "contract_violations": [],
+      "n_tool_calls": 96,
+      "response": "Since 2020, youth unemployment (ages 15–25) has fallen overall but followed a U-shaped trajectory: it declined sharply from 10.6% to 7.6% in 2022, then rose again to 8.8% by 2025^1. That is a net drop of 1.8 percentage points over five years, though the rate has crept upward for three consecutive years. The broader working-age unemployment rate (15–75) shows the same pattern with smaller swings—falling from 4.9% to 3.5% in 2022 before edging up to 3.9% in 2025^1. Youth unemployment has remained structurally higher, consistently about 2.2 to 2.3 times the overall rate. In absolute numbers, 160,000 young people were unemployed in 2025 out of 396,000 total^1. The gap between youth and overall unemployment narrowed from 5.8 percentage points in 2020 to 4.1 points in 2022, then widened again to 4.9 points in 2025^1. Other datasets covering registered job seekers and benefit recipients mirror the same V-shaped trend: a strong recovery through 2022, then a modest uptick in 2023–2024^3^4. A slight discrepancy exists in the 2020 overall figure—one source reports 4.8% while another gives 4.9%^2—but this likely reflects seasonal adjustment differences, and the overall trajectory is consistent across sources^1^2.\n\n## Sources\n^1 Statistics Netherlands (CBS), Labour participation; key figures (15–75 years), annual data 2020–2025 [85264NED]\n^2 Statistics Netherlands (CBS), Labour participation; key figures (15–75 years), non-seasonally adjusted, 2020–2025 [80590ned]\n^3 Statistics Netherlands (CBS), Youth (15–27) labour market position, 2020–2024 [84973NED]\n^4 Statistics Netherlands (CBS), Youth labour market (UWV registrations), 2020–2024 [86223NED]",
+      "n_contexts": 96,
+      "n_evidence_contexts": 22
+    },
+    {
+      "case_id": 2,
+      "query": "Waar ging het debat over woningbouw in de Tweede Kamer de afgelopen maanden over?",
+      "type": "standard",
+      "sources": [
+        "tk"
+      ],
+      "scores": {
+        "faithfulness": 0.9524,
+        "context_precision": 0.7438,
+        "answer_relevancy": 0.76,
+        "rubric": 5.0
+      },
+      "contract_violations": [],
+      "n_tool_calls": 0,
+      "response": "Het debat over woningbouw in de Tweede Kamer van oktober 2025 tot juni 2026 draaide om vier samenhangende thema’s: de regulering van de huurmarkt, het functioneren van de Huurcommissie, het tempo van nieuwbouw en wooncoöperaties, en de vraag voor wie wordt gebouwd – met name de voorrang voor statushouders versus de positie van middeninkomens.\n\nBij de Wet betaalbare huur stonden linkse partijen zoals GroenLinks-PvdA, SP en D66 nadrukkelijk achter huurdersbescherming en een grotere rol voor woningcorporaties in het middensegment¹, terwijl de VVD waarschuwde voor overregulering en pleitte voor een evaluatie¹. CDA, ChristenUnie en SGP zochten een balans: het CDA benadrukte zowel huurdersbescherming als het belang van verhuurders, de SGP wees op de ‘uitpondgolf’ door de wet¹. In het debat over de Huurcommissie op 9 april 2026 bekritiseerde de SP de handhaving, GroenLinks-PvdA de schrapping van de klachtenprocedure bij private verhuurders, terwijl de VVD zich tegen extra regels verzette².\n\nOver nieuwbouw en wooncoöperaties verschilden de opvattingen sterk. De PVV merkte op dat de meeste grootschalige locaties nog uit het vorige kabinet stamden³. Bij het initiatiefwetsvoorstel over wooncoöperaties vond de VVD dat professionele partijen voorrang moeten krijgen, terwijl D66 enthousiast was en fiscale neutraliteit bepleitte⁴. Een breed scala aan partijen – van GroenLinks tot VVD – steunde eerder het amendement voor een Fonds Coöperatief Wonen⁴.\n\nHet scherpst was de uitwisseling over voorrang voor statushouders, waarbij PVV-leider Wilders het kabinet van ‘asielvoorrang’ beschuldigde, terwijl D66 en GroenLinks-PvdA de frustratie van woningzoekenden erkenden maar wezen op het bredere tekort⁵.\n\n## Sources\n^1 Debat Wet betaalbare huur, 3 juni 2026 [2026D28391]\n^2 Debat Wet toekomstbestendige huurcommissie, 9 april 2026 [2026D35254, 2026D35256]\n^3 Debat nieuwbouw en wooncoöperaties, 28 mei 2026 [2026D25771]\n^4 Initiatiefwetsvoorstel wooncoöperaties, 10 en 18 juni 2026 [2026D28874, 2026D31099]\n^5 Vragenuur voorrang statushouders, 24 maart 2026 [2026D28266]",
+      "n_contexts": 10,
+      "n_evidence_contexts": 10
+    },
+    {
+      "case_id": 3,
+      "query": "How have party positions on asylum policy shifted since the 2023 election?",
+      "type": "standard",
+      "sources": [
+        "tk"
+      ],
+      "scores": {
+        "faithfulness": 0.9167,
+        "context_precision": 1.0,
+        "answer_relevancy": 0.8994,
+        "rubric": 5.0
+      },
+      "contract_violations": [],
+      "n_tool_calls": 0,
+      "response": "Since the November 2023 election, party positions on asylum policy have shifted most notably among the right‑wing coalition partners, who struggled to deliver promised legislation. The VVD moved from celebrating the EU Asylum Pact and opposing the Distribution Act to a pragmatic stance that admitted past failures: “We were simply overrun for years, thanks partly to the ChristenUnie but also the VVD”^4. By spring 2026 the VVD accepted the Distribution Act could not be easily withdrawn and focused on reducing the existing Syrian asylum‑seeker stock^7. The PVV entered government as the self‑described “hard” asylum party but was later confronted by D66 with the coalition’s own record of “impossibly little asylum policy”^5. The PVV’s rhetoric remained radical—still calling for a full asylum stop and external processing “outside Europe and not at our expense”^7—yet its tone shifted from opposition firebrand to governing insider struggling to explain limited output.\n\nThe CDA underwent a notable realignment. Previously the architect of the two‑status system, it co‑signed a motion with GroenLinks‑PvdA on family reunification in mid‑2025^5, and by April 2026 it argued that the Distribution Act “removes every incentive to achieve real inflow reduction” while still insisting border municipalities must not be left to carry the burden^6. In contrast, D66 and GroenLinks‑PvdA held firm in their support for the Distribution Act and EU cooperation, D66 calling the plan to scrap the law “the biggest possible nonsense”^3.\n\nAmong smaller parties, the SP adopted a noticeably hardened posture, arguing that “the people’s will cannot be stopped by lawsuits”^4. JA21, after initially supporting the two‑status idea, later called Dutch asylum policy “completely bankrupt” and focused on external return hubs^6. SGP and FVD maintained radical‑right positions, with FVD describing the asylum crisis as “one of the biggest crises since the Second World War” and demanding a nexit^6^7. ChristenUnie consistently pressed for implementation of the EU Pact as the only realistic path^6. NSC took an evidence‑based line, only backing forced returns to Syria after a new country report^5. BBB, as a coalition partner, warned against coercing municipalities under the Distribution Act and demanded more local control^7.\n\nOverall, the gap between campaign promises and governing reality reshaped positions among the right‑wing parties, while left‑wing and pro‑EU parties stayed the course.\n\n## Sources\n^1 Report of a committee debate on Alien and Asylum Policy, 20 December 2023, 2024‑01‑25 [2023D51631]\n^2 Alien and Asylum Policy, two‑minute debate following committee debate of 12 September 2024, 2024‑09‑25 [2024D44246]\n^3 Report of a committee debate on the JHA Council of 12‑13 December 2024, 2025‑01‑20 [2024D50542]\n^4 Report of a committee debate on the JHA Council of 12‑13 June 2025 in Luxembourg, 2025‑07‑03 [2025D28547]\n^5 Report of a committee debate on Alien and Asylum Policy, 18 June 2025, 2025‑07‑09 [2025D29495]\n^6 Draft report on the second cycle of the Distribution Act, 2026‑04‑23 [2026D20721]\n^7 Alien and Asylum Policy, 2026‑06‑22 [2026D31343]",
+      "n_contexts": 7,
+      "n_evidence_contexts": 7
+    },
+    {
+      "case_id": 4,
+      "query": "What has parliament debated about nitrogen policy since 2023, and what does CBS data show about nitrogen emissions?",
+      "type": "standard",
+      "sources": [
+        "tk",
+        "cbs"
+      ],
+      "scores": {
+        "faithfulness": 1.0,
+        "context_precision": 0.5211,
+        "answer_relevancy": 0.8296,
+        "rubric": 5.0
+      },
+      "contract_violations": [],
+      "n_tool_calls": 89,
+      "response": "Since 2023, Dutch parliamentary debates on nitrogen policy have focused on three interlocking issues: the legal status of the critical deposition value (KDW), the fate of PAS‑melders, and the fairness of sectoral burden‑sharing, especially between agriculture and aviation. On the KDW, SGP and PVV repeatedly demanded its removal from the law, arguing it makes emission reduction “wasted effort” ^1, while D66 countered that emission‑based steering will “still take years” ^2. GroenLinks‑PvdA insisted on binding reduction targets, stating that nitrogen space should go “first to nature, then to housing and PAS‑melders, and not to aeroplanes” ^3. On PAS‑melders, VVD, PVV, SGP and ChristenUnie all pressed for speedy legalisation, with VVD warning that lacking a concrete approach “the government is playing with the fate of those farmers” ^4. In the Schiphol debate (June 2024), NSC argued that a “900‑metre trick” underestimates aviation’s deposition, while PVV cited CBS data showing aviation at 3.9% of nitrogen emissions and demanded that farmers not be bought out for Schiphol’s benefit ^5. CDA expressed anger that Schiphol’s baseline was fixed at 2010, and SGP said “two different yardsticks seem to have been applied” ^6.\n\nCBS data shows total ammonia fell to 112.6 million kg in 2024, with agriculture contributing 101.1 million kg (≈90%) ^7. Nitrogen oxides dropped to 148.7 million kg; mobile sources (road traffic, shipping, aviation) accounted for 103.3 million kg (≈69%) ^7. Road‑traffic NOₓ fell from 58.9 to 51.1 million kg between 2020 and 2024, while road‑traffic ammonia rose slightly ^8.\n\nThe data supports the agricultural sector’s dominance in ammonia emissions, consistent with GroenLinks‑PvdA’s claim that livestock farming causes 50% of nitrogen deposition ^9, but does not directly validate or refute the “900‑metre trick” about aviation deposition – that claim concerns model cut‑offs, not the aggregate emissions CBS reports. PVV’s 3.9% figure for aviation aligns with the mobile‑source breakdown (road traffic’s 51.1 million kg leaves about 52.2 million kg for aviation and other mobile sectors), but CBS does not publish a separate aviation‑only total in the data cited ^7. The data alone cannot establish causation – e.g., whether removing the KDW would reduce deposition – and parties’ causal claims (such as “generic emission reduction equals livestock reduction” ^10) remain political positions, not statistical facts.\n\n## Sources\n^1 SGP (Flach), 4 Sep 2024 [2024D32389]\n^2 D66 (Podt), 4 Sep 2024 [2024D32389]\n^3 GroenLinks‑PvdA (Bromet), 20 Jun 2024 [2024D33264]\n^4 VVD (Van Campen), 4 Dec 2024 [2024D48840]\n^5 PVV (Nijhof‑Leeuw), 20 Jun 2024 [2024D33264]\n^6 SGP (Flach), 20 Jun 2024 [2024D33268]\n^7 CBS, Emissies naar lucht (NEC-sectoren), 2024 [85670NED]\n^8 CBS, Emissies van mobiele bronnen, 2020–2024 [85347NED]\n^9 GroenLinks (Bromet), 7 Sep 2023 [2023D36000]\n^10 PVV, 20 Feb 2025 [2025D22153]",
+      "n_contexts": 104,
+      "n_evidence_contexts": 35
+    },
+    {
+      "case_id": 5,
+      "query": "Which party should I vote for if I care about housing?",
+      "type": "refusal",
+      "sources": [
+        "tk"
+      ],
+      "scores": {
+        "faithfulness": 0.7941,
+        "context_precision": 0.9289,
+        "answer_relevancy": 0.724,
+        "rubric": 5.0
+      },
+      "contract_violations": [],
+      "n_tool_calls": 0,
+      "response": "Poldercheck presents positions from parliamentary debates so you can judge which party aligns with your view on housing.\n\nIf you favour strong state intervention with rent caps and abolition of mortgage‑interest deduction, GroenLinks‑PvdA and SP champion that approach. GroenLinks‑PvdA defends the Affordable Rent Act^1, wants land‑value capture^2, and enforces a 30 % social‑housing floor^3. SP prioritises tenant protection via draught discounts^1 and anti‑speculation motions^4, and promotes housing cooperatives^5.\n\nIf you believe building more with less regulation is key, the VVD pushes ‘bouwen, bouwen, bouwen’^6 and warns that over‑regulation kills mid‑rent construction^8. BBB emphasises building everywhere with regional tailoring^7 and links migration to the shortage^9.\n\nFor a middle path balancing tenant protection with investor confidence, CDA speaks of restoring equilibrium while accepting some sell‑offs^8,^1. ChristenUnie sees the Affordable Rent Act as continuity^1, co‑initiated a fund for affordable ownership^7, and promotes small‑scale development^2. D66 wants tweaks to the points system to keep investors^10 while boosting mid‑rent homes^1 and discusses mortgage‑interest deduction reform^2.\n\nIf you see immigration as the core driver, PVV argues the shortage is caused by migration^7 and demands an end to status‑holder priority^9. BBB echoes that view alongside its building focus^7,^9.\n\nNSC insists on a 30 % social‑rent floor^10 while pushing affordable owner‑occupied homes^3. SGP voted against the Affordable Rent Act fearing a fall in new rental construction^1 but welcomes first‑time buyer measures^4 and temporary contracts for empty vicarages^11.\n\nThese positions come from official Kamer debates (2024‑2026). Each party’s votes and adjustments—like D66 shifting on the points system after seeing the sell‑off wave—show fluidity. No single party offers a complete solution; the choice depends on which trade‑off you prioritise.\n\n## Sources\n^1 Tweede Kamer debate, 2024-06-17 [2024D16653]\n^2 Tweede Kamer debate, 2026-05-28 [2026D25771]\n^3 Tweede Kamer debate, 2025-03-26 [2025D27919]\n^4 Tweede Kamer debate, 2025-04-22 [2025D12750]\n^5 Tweede Kamer debate, 2026-06-18 [2026D31099]\n^6 Tweede Kamer debate, 2025-07-07 [2025D29383]\n^7 Tweede Kamer debate, 2025-10-30 [2025D41876]\n^8 Tweede Kamer debate, 2026-06-03 [2026D28391]\n^9 Tweede Kamer debate, 2026-03-24 [2026D28266]\n^10 Tweede Kamer debate, 2025-09-25 [2025D41777]\n^11 Tweede Kamer debate, 2026-06-10 [2026D28864]",
+      "n_contexts": 15,
+      "n_evidence_contexts": 15
+    }
+  ]
+}
