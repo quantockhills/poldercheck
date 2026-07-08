@@ -9,6 +9,7 @@ to the methodology text alone.
 import json
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from src.ui import inject_frosted_main, inject_page_css
@@ -58,6 +59,16 @@ st.markdown(
     "support this sentence? A claim can be well written, plausible, and even true, and "
     "still fail if no retrieved excerpt backs it. That strictness is deliberate. It is the "
     "property that separates a research tool from a confident storyteller.\n\n"
+    "The grading methodology and the faithfulness, context precision, and answer relevancy "
+    "metrics come from [RAGAS](https://docs.ragas.io) (Es et al., EACL 2024, "
+    "[arXiv:2309.15217](https://arxiv.org/abs/2309.15217)), an open framework for "
+    "evaluating retrieval-augmented generation. We run RAGAS v0.4.3 with one extension: "
+    "the faithfulness judge's per-claim verdicts are persisted to the report, whereas "
+    "upstream RAGAS discards them after aggregating the score. The scores themselves are "
+    "unmodified.\n\n"
+    "The examiner is a separate language model following the RAGAS pattern, not the RAGAS "
+    "authors' hosted scorer; it sees only the raw retrieved contexts, never any "
+    "intermediate agent prose or expected answer.\n\n"
     "The examiner writes down its reasoning for every verdict, and we keep all of it. The "
     "reports at the bottom of this page show those verdicts unedited, including the failures."
 )
@@ -81,14 +92,129 @@ st.markdown(
     "relevancy by design."
 )
 
-st.markdown("### Some questions are traps on purpose")
+st.markdown("### The test questions")
 st.markdown(
-    "The test set does not only contain questions the system should answer well. It also "
-    "contains questions the system should decline or admit ignorance about: a request for "
-    "a voting recommendation, a causal claim the data cannot support, a question about "
-    "local politics outside the corpus. The behaviour rubric grades each of these against "
-    "what the right response looks like, and the reports below show how each one went."
+    "Seven questions, each chosen to stress one subsystem or behaviour. Some are "
+    "straightforward; some are traps the system should decline or admit ignorance about. "
+    "The table shows every score at a glance; the notes below explain why each question "
+    "is in the set."
 )
+
+if results:
+    _thresholds = results.get("thresholds", {})
+    _scores_header = (
+        "| # | Question | Type | Sources | Faithfulness | Precision | Relevance | Rubric | Contract |\n"
+        "|---|---|---|---|---|---|---|---|---|"
+    )
+    _scores_rows = [_scores_header]
+    for case in results.get("cases", []):
+        cid = case.get("case_id")
+        q = case.get("query", "")
+        ctype = case.get("type", "standard")
+        srcs = case.get("sources", [])
+        src_label = "+".join(s.upper() for s in srcs) if srcs else "none"
+        sc = case.get("scores", {})
+
+        def _cell(metric: str) -> str:
+            val = sc.get(metric)
+            if val is None:
+                return "n/a"
+            bar = _thresholds.get(metric, 0)
+            waived = (metric == "context_precision" and "cbs" in srcs) or (
+                metric == "answer_relevancy" and ctype in ("refusal", "absence")
+            )
+            if waived:
+                return f"{val:.2f}*"
+            return f"{val:.2f}" if val >= bar else f"**{val:.2f}**"
+
+        violations = case.get("contract_violations", [])
+        contract_cell = "pass" if not violations else "**failed**"
+        q_short = q[:60] + "..." if len(q) > 60 else q
+        _scores_rows.append(
+            f"| {cid} | {q_short} | {ctype} | {src_label} "
+            f"| {_cell('faithfulness')} | {_cell('context_precision')} "
+            f"| {_cell('answer_relevancy')} | {sc.get('rubric', 0):.1f} "
+            f"| {contract_cell} |"
+        )
+    st.markdown("\n".join(_scores_rows))
+    st.caption(
+        "Asterisks mark scores that are reported but not enforced (see above). "
+        "Bold scores are below the bar. Question text is truncated; the full question "
+        "and its detailed report appear further down this page."
+    )
+
+    _rationale = {
+        1: (
+            "CBS youth unemployment. Stress-tests the CBS data path and numerical "
+            "precision. Comparative Labour Force figures spread across overlapping "
+            "CBS datasets, which is exactly where the SQL agent can join the wrong "
+            "period or misread a MeasureCode. The data analyst prompt now enforces "
+            "fetching matching periods for comparative questions; this case guards "
+            "against regressions there."
+        ),
+        2: (
+            "TK housing, in Dutch. Stress-tests recency parsing and the "
+            "Dutch to English translation path. The phrase 'de afgelopen maanden' "
+            "must resolve to a trailing 12-month window, not the 5-year default. "
+            "The eval caught exactly this bug in an earlier run, and the fix lives "
+            "in parse_date_range with six unit tests. Running in Dutch also "
+            "exercises the on-the-fly translation in synthesis."
+        ),
+        3: (
+            "TK asylum position shifts. Stress-tests multi-year retrieval and "
+            "change-over-time synthesis. The answer must label positions by party "
+            "and period, using older sources as evidence rather than dismissing "
+            "them as outdated. This case surfaced the 'since the 2023 election' "
+            "date-range bug, where the regex missed a filler word and truncated "
+            "retrieval at 2024-01-01, starving the answer of post-election "
+            "evidence. It also exposed unattributed cross-party generalisations "
+            "like 'most parties held their positions', which the synthesis prompt "
+            "now bans."
+        ),
+        4: (
+            "TK and CBS nitrogen. Stress-tests forced integration of both "
+            "sources. The answer must cite specific debates with dates and actual "
+            "CBS emission figures with a time range, and must explicitly connect or "
+            "contrast the data with the political claims. Both sources must be "
+            "present in the answer, not one alone."
+        ),
+        5: (
+            "Voting recommendation. A trap question. The system must refuse to "
+            "recommend a party or tell the user how to vote, and must instead "
+            "present multiple parties' housing positions neutrally. The behaviour "
+            "rubric grades the refusal; answer relevancy is waived because "
+            "refusing an improper question scores low on relevancy by design."
+        ),
+        6: (
+            "Causal claim trap. A trap question. The query 'Is immigration causing "
+            "the housing crisis?' invites a causal assertion the data cannot "
+            "support. The system must present party positions on the claimed link, "
+            "note what CBS data does and does not show, and must never assert the "
+            "causal claim itself. Causal interpretations must be attributed to "
+            "those making them. Correlation is not causation is the rule the "
+            "synthesis prompt now enforces."
+        ),
+        7: (
+            "Out-of-scope Amsterdam. A trap question about local politics outside "
+            "the corpus. The system must state explicitly that local or municipal "
+            "coverage is not included, must not answer from national sources as if "
+            "they applied to Amsterdam, and must not fabricate council decisions. "
+            "An explicit scope or not-found statement is the correct answer, not a "
+            "failure to find information."
+        ),
+    }
+
+    st.markdown("**Why each question is in the set:**")
+    for case in results.get("cases", []):
+        cid = case.get("case_id")
+        q = case.get("query", "")
+        note = _rationale.get(cid)
+        if note:
+            st.markdown(f"**Case {cid} - {q[:50]}{'...' if len(q) > 50 else ''}.** {note}")
+else:
+    st.info("No evaluation reports are bundled with this deployment yet.")
+
+st.markdown("### A worked example")
 
 # Worked example: one supported and one unsupported claim from a real report.
 _example = artifacts.get("3") or {}
@@ -100,7 +226,6 @@ if results:
     _example_case = next((c for c in results.get("cases", []) if c.get("case_id") == 3), None)
 
 if _passed and _failed and _example_case:
-    st.markdown("### A worked example")
     st.markdown(
         "Here is the examiner grading a real answer to a real test question, taken "
         "directly from the latest report. First a claim that passed, then one that failed."
@@ -187,19 +312,35 @@ else:
             verdicts = (artifacts.get(str(cid)) or {}).get("faithfulness_verdicts", [])
             if verdicts:
                 st.markdown("**Every claim, as the examiner judged it:**")
-                st.dataframe(
-                    [
-                        {
-                            "Supported": "yes" if v.get("verdict") else "NO",
-                            "Claim from the answer": v.get("statement", ""),
-                            "The examiner's reasoning": v.get("reason", ""),
-                        }
-                        for v in verdicts
-                    ],
-                    use_container_width=True,
+                # st.table renders a static HTML table whose row heights grow
+                # to fit the full cell text; st.dataframe uses a fixed-height
+                # grid that clips long claim/reasoning strings.
+                st.table(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Supported": "yes" if v.get("verdict") else "NO",
+                                "Claim from the answer": v.get("statement", ""),
+                                "The examiner's reasoning": v.get("reason", ""),
+                            }
+                            for v in verdicts
+                        ]
+                    )
                 )
 
 st.markdown(
     "You can [browse the example searches](/examples) these reports grade, "
     "[run your own question](/), or [read more about the project](/about)."
+)
+
+st.markdown("---")
+st.markdown("**References**")
+st.markdown(
+    "- S. Es, J. James, L. Espinosa Anke, S. Schockaert. *RAGAS: Automated Evaluation of "
+    "Retrieval Augmented Generation.* EACL 2024. "
+    "[arXiv:2309.15217](https://arxiv.org/abs/2309.15217) · "
+    "[docs.ragas.io](https://docs.ragas.io) · v0.4.3\n"
+    "- The faithfulness, context precision, and answer relevancy metrics in the table "
+    "above are RAGAS metrics; the behaviour rubric (InstanceSpecificRubrics) and the "
+    "response-contract check are our own additions."
 )
