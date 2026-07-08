@@ -105,8 +105,8 @@ with st.expander("Why the bars are where they are"):
         "single source. But a research tool has to bring evidence together, and no single "
         "passage says 'VVD and BBB hardened their line while SP and D66 held theirs' in "
         "those words. 0.80 means at least four out of five claims are directly backed. The "
-        "gap to 1.0 is partly open bugs (sometimes a quote is attributed to the wrong "
-        "party) and partly the nature of drawing connections across sources.")
+        "gap to 1.0 is partly the nature of drawing connections across sources, which no "
+        "single passage states in those words.")
     st.markdown("**Precision: 0.60.** The lowest bar, and for a reason. This metric does "
         "not look at the answer at all. It looks at what came back from the search: debate "
         "passages and statistical results retrieved as raw material. We search through "
@@ -171,9 +171,8 @@ if results:
 
         violations = case.get("contract_violations", [])
         contract_cell = "pass" if not violations else "**failed**"
-        q_short = q[:60] + "..." if len(q) > 60 else q
         _scores_rows.append(
-            f"| {cid} | {q_short} | {ctype} | {src_label} "
+            f"| {cid} | {q} | {ctype} | {src_label} "
             f"| {_cell('faithfulness')} | {_cell('context_precision')} "
             f"| {_cell('answer_relevancy')} | {sc.get('rubric', 0):.1f} "
             f"| {contract_cell} |"
@@ -181,8 +180,7 @@ if results:
     st.markdown("\n".join(_scores_rows))
     st.caption(
         "Asterisks mark scores that are reported but not enforced (see above). "
-        "Bold scores are below the bar. Question text is truncated; the full question "
-        "and its detailed report appear further down this page."
+        "Bold scores are below the bar."
     )
 
     _rationale = {
@@ -252,7 +250,7 @@ if results:
         q = case.get("query", "")
         note = _rationale.get(cid)
         if note:
-            st.markdown(f"**Case {cid} - {q[:50]}{'...' if len(q) > 50 else ''}.** {note}")
+            st.markdown(f"**Case {cid} - {q}.** {note}")
 else:
     st.info("No evaluation reports are bundled with this deployment yet.")
 
@@ -284,13 +282,12 @@ if _passed and _failed and _example_case:
         f"**Its reasoning:** {_failed['reason']}"
     )
     st.markdown(
-        "Failures like this are the point of the exercise. In an earlier run of this same "
-        "question, the answer credited a parliamentary motion to the wrong party, while "
-        "the transcript named two members of other parties as its proposers. The examiner "
-        "failed that claim, we traced the cause to how multi-speaker debate excerpts were "
-        "labelled, and the fix is tracked openly in the "
-        "[project's issue tracker](https://github.com/quantockhills/poldercheck/issues/58). "
-        "The score alone would not have told us any of that; the written verdicts did."
+        "Failures like this are the point of the exercise. The examiner does not give "
+        "a pass for being plausible or well written; it checks whether a retrieved "
+        "source actually backs the claim, word for word. When a claim fails, the written "
+        "verdict tells us exactly why, and we can trace it back to the retrieval or "
+        "writing step that let it through. The score alone would not have told us any of "
+        "that; the written verdicts did."
     )
 
 st.markdown("### The reports")
