@@ -92,6 +92,48 @@ st.markdown(
     "relevancy by design."
 )
 
+with st.expander("Why the bars are where they are"):
+    st.markdown(
+        "No bar is set at a perfect 1.0. Each metric looks at a different part of the "
+        "process, and some parts are inherently noisier than others. A perfect score on "
+        "everything would mean the system never draws a connection between sources, never "
+        "hedges, and never acknowledges a gap, which would stop it being a research tool."
+    )
+    st.markdown("**Faithfulness: 0.80.** This checks the final answer. Every claim is "
+        "tested: does a retrieved debate excerpt or statistical result actually support "
+        "this sentence? A bar of 1.0 would mean every claim is backed word for word by a "
+        "single source. But a research tool has to bring evidence together, and no single "
+        "passage says 'VVD and BBB hardened their line while SP and D66 held theirs' in "
+        "those words. 0.80 means at least four out of five claims are directly backed. The "
+        "gap to 1.0 is partly open bugs (sometimes a quote is attributed to the wrong "
+        "party) and partly the nature of drawing connections across sources.")
+    st.markdown("**Precision: 0.60.** The lowest bar, and for a reason. This metric does "
+        "not look at the answer at all. It looks at what came back from the search: debate "
+        "passages and statistical results retrieved as raw material. We search through "
+        "more than 16,500 debate transcripts and nearly 1,300 CBS datasets, and we "
+        "retrieve passages and full query results, not just the one sentence that answers "
+        "the question. Much of that material is broader than the specific question, and "
+        "this metric counts that breadth as noise. That is by design: the ranking step and "
+        "the writing step filter the noise before the answer is produced. A low score here "
+        "means we cast a wide net, not that the answer is sloppy. For statistical "
+        "questions, precision is reported but not enforced, as explained above.")
+    st.markdown("**Relevance: 0.70.** This asks whether the answer addresses the question. "
+        "It is lower than faithfulness because of how it works: it generates candidate "
+        "questions from the answer and compares them to the original. An answer that mixes "
+        "Dutch debate excerpts with English explanation, or that carefully hedges and "
+        "frames its points, will score lower even when it is squarely on topic.")
+    st.markdown("**Rubric: 4.0 out of 5.** Our own check, not from RAGAS. 4 means 'good, "
+        "with minor gaps.' 5 means 'exemplary.' The bar is at 4 because our grounding rules "
+        "(never invent, never overstate) sometimes make the answer more cautious than a "
+        "reader might want. Trading a little boldness for honesty is the right call.")
+    st.markdown("**Contract: must pass.** No model, no judgement. Either citations are "
+        "present or they are not. Either the answer is within its word budget or it is "
+        "not. This is the one bar with no slack.")
+    st.markdown(
+        "The bars will rise as the remaining known issues are fixed. What will not change "
+        "is the principle: measured, not asserted."
+    )
+
 st.markdown("### The test questions")
 st.markdown(
     "Seven questions, each chosen to stress one subsystem or behaviour. Some are "
